@@ -84,7 +84,7 @@ async function getMyUserId(): Promise<string> {
 }
 
 async function replyToComment(commentId: string, username: string) {
-  const message = `תודה על התגובה! שלחתי לך הודעה בפרטי 🙏`;
+  const message = `זוהי הודעת בדיקה`;
 
   try {
     const res = await fetch(`${GRAPH_API}/${commentId}/replies`, {
@@ -108,7 +108,7 @@ async function replyToComment(commentId: string, username: string) {
 }
 
 async function sendDirectMessage(recipientId: string) {
-  const message = `היי! תודה שהגבת על הפוסט שלי. אם יש לך שאלות על AI ויצירת תוכן, אני כאן 🚀`;
+  const message = `זוהי הודעת בדיקה`;
 
   try {
     // Get our own ID for the messages endpoint
