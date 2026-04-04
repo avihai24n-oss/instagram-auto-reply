@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN!;
 const ACCESS_TOKEN = process.env.INSTAGRAM_ACCESS_TOKEN!;
 const GRAPH_API = "https://graph.instagram.com/v21.0";
+const BOT_ENABLED = process.env.BOT_ENABLED !== "false"; // enabled by default
 
 // GET — Webhook verification (Meta sends this to verify your endpoint)
 export async function GET(request: NextRequest) {
@@ -25,6 +26,11 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
     console.log("Webhook event received:", JSON.stringify(body, null, 2));
+
+    if (!BOT_ENABLED) {
+      console.log("Bot is disabled");
+      return NextResponse.json({ status: "disabled" }, { status: 200 });
+    }
 
     // Process each entry from the webhook payload
     if (body.entry) {
