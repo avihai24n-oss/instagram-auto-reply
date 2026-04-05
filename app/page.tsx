@@ -433,6 +433,7 @@ function PostForm({
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         mediaId: igPost.id,
+        permalink: igPost.permalink,
         name: postName,
         enabled: true,
         keywords,

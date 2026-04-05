@@ -10,6 +10,7 @@ const CONFIG_ID = "main";
 export interface PostConfig {
   id: string;
   mediaId: string;
+  permalink?: string;
   name: string;
   enabled: boolean;
   keywords: string[];

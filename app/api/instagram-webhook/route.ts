@@ -106,9 +106,28 @@ async function handleComment(
   console.log(`Webhook media.id: "${media.id}"`);
 
   // 1. Check if there's a specific post config for this media
-  const postConfig = config.posts.find(
+  // Try matching by mediaId first, then by permalink
+  let postConfig = config.posts.find(
     (p) => p.enabled && p.mediaId === media.id
   );
+
+  // If no match by mediaId, fetch permalink from API and match by that
+  if (!postConfig) {
+    const permalink = await getMediaPermalink(media.id);
+    if (permalink) {
+      postConfig = config.posts.find(
+        (p) => p.enabled && p.permalink && p.permalink === permalink
+      );
+      // If matched, update the stored mediaId for faster future matching
+      if (postConfig) {
+        console.log(`Matched by permalink, updating stored mediaId from ${postConfig.mediaId} to ${media.id}`);
+        postConfig.mediaId = media.id;
+        const { saveConfig } = await import("@/lib/config");
+        await saveConfig(config);
+      }
+    }
+  }
+
   console.log(`Post config match: ${postConfig ? postConfig.name : "NONE"}`);
   if (postConfig) {
     console.log(`Post keywords: ${JSON.stringify(postConfig.keywords)}, replyMessage: "${postConfig.replyMessage}"`);
@@ -234,6 +253,22 @@ function findMatchingKeyword(
 
 function escapeRegex(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+async function getMediaPermalink(mediaId: string): Promise<string | null> {
+  try {
+    const res = await fetch(`${GRAPH_API}/${mediaId}?fields=permalink&access_token=${ACCESS_TOKEN}`);
+    const data = await res.json();
+    if (data.error) {
+      console.error("Error fetching media permalink:", data.error);
+      return null;
+    }
+    console.log(`Media ${mediaId} permalink: ${data.permalink}`);
+    return data.permalink || null;
+  } catch (error) {
+    console.error("Failed to fetch media permalink:", error);
+    return null;
+  }
 }
 
 async function getMyUserId(): Promise<string> {
