@@ -152,7 +152,7 @@ async function handleComment(
     ];
     if (postConfig.sendDM) {
       actions.push(
-        sendDirectMessage(from.id, postConfig.dmMessage, config.quickReplies)
+        sendPrivateReply(commentId, postConfig.dmMessage)
       );
     }
     await Promise.allSettled(actions);
@@ -167,7 +167,7 @@ async function handleComment(
     ];
     if (matchedKeyword.sendDM) {
       actions.push(
-        sendDirectMessage(from.id, matchedKeyword.dmMessage, config.quickReplies)
+        sendPrivateReply(commentId, matchedKeyword.dmMessage)
       );
     }
     await Promise.allSettled(actions);
@@ -294,6 +294,29 @@ async function replyToComment(commentId: string, message: string, username: stri
     }
   } catch (error) {
     console.error("Failed to reply to comment:", error);
+  }
+}
+
+async function sendPrivateReply(commentId: string, message: string) {
+  try {
+    const myUserId = await getMyUserId();
+    const res = await fetch(`${GRAPH_API}/${myUserId}/messages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        recipient: { comment_id: commentId },
+        message: { text: message },
+        access_token: ACCESS_TOKEN,
+      }),
+    });
+    const data = await res.json();
+    if (data.error) {
+      console.error("Error sending private reply:", data.error);
+    } else {
+      console.log(`Private reply DM sent for comment ${commentId}`);
+    }
+  } catch (error) {
+    console.error("Failed to send private reply:", error);
   }
 }
 
