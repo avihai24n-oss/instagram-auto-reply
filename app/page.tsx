@@ -178,6 +178,16 @@ function GeneralTab({
   );
 }
 
+// ========== Instagram Post type ==========
+interface InstagramPost {
+  id: string;
+  caption: string;
+  mediaType: string;
+  mediaUrl: string;
+  timestamp: string;
+  permalink: string;
+}
+
 // ========== Posts Tab ==========
 function PostsTab({
   posts,
@@ -188,7 +198,8 @@ function PostsTab({
   onRefresh: () => void;
   onToast: (m: string) => void;
 }) {
-  const [showForm, setShowForm] = useState(false);
+  const [showPicker, setShowPicker] = useState(false);
+  const [selectedPost, setSelectedPost] = useState<InstagramPost | null>(null);
 
   const deletePost = async (id: string) => {
     await fetch("/api/config/posts", {
@@ -214,29 +225,42 @@ function PostsTab({
       <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 16 }}>
         <div>
           <h3 style={{ color: "#fff" }}>פוסטים ספציפיים</h3>
-          <p className="section-desc">הגדר תגובה והודעה שונה לכל פוסט</p>
+          <p className="section-desc">בחר פוסט מהאינסטגרם שלך והגדר תגובה אוטומטית</p>
         </div>
-        <button className="btn btn-primary" onClick={() => setShowForm(true)}>
-          + הוסף פוסט
+        <button className="btn btn-primary" onClick={() => setShowPicker(true)}>
+          + בחר פוסט
         </button>
       </div>
 
-      {showForm && (
-        <PostForm
-          onSave={() => {
-            setShowForm(false);
-            onRefresh();
-            onToast("פוסט נוסף!");
-          }}
-          onCancel={() => setShowForm(false)}
+      {showPicker && !selectedPost && (
+        <PostPicker
+          existingMediaIds={posts.map((p) => p.mediaId)}
+          onSelect={(post) => setSelectedPost(post)}
+          onCancel={() => setShowPicker(false)}
         />
       )}
 
-      {posts.length === 0 && !showForm && (
+      {selectedPost && (
+        <PostForm
+          igPost={selectedPost}
+          onSave={() => {
+            setSelectedPost(null);
+            setShowPicker(false);
+            onRefresh();
+            onToast("פוסט נוסף!");
+          }}
+          onCancel={() => {
+            setSelectedPost(null);
+            setShowPicker(false);
+          }}
+        />
+      )}
+
+      {posts.length === 0 && !showPicker && !selectedPost && (
         <div className="empty">
           <p>אין פוסטים מוגדרים עדיין</p>
           <p style={{ fontSize: 13, marginTop: 8 }}>
-            לחץ על &quot;הוסף פוסט&quot; כדי להגדיר תגובות לפוסט ספציפי
+            לחץ על &quot;בחר פוסט&quot; כדי לבחור פוסט מהאינסטגרם שלך
           </p>
         </div>
       )}
@@ -285,9 +309,111 @@ function PostsTab({
   );
 }
 
-function PostForm({ onSave, onCancel }: { onSave: () => void; onCancel: () => void }) {
-  const [name, setName] = useState("");
-  const [mediaId, setMediaId] = useState("");
+// ========== Post Picker — shows real Instagram posts ==========
+function PostPicker({
+  existingMediaIds,
+  onSelect,
+  onCancel,
+}: {
+  existingMediaIds: string[];
+  onSelect: (post: InstagramPost) => void;
+  onCancel: () => void;
+}) {
+  const [posts, setPosts] = useState<InstagramPost[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    const fetchPosts = async () => {
+      try {
+        const res = await fetch("/api/instagram-posts");
+        const data = await res.json();
+        if (data.error) {
+          setError(data.error);
+        } else {
+          setPosts(data.posts || []);
+        }
+      } catch {
+        setError("Failed to load posts");
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchPosts();
+  }, []);
+
+  if (loading) {
+    return (
+      <div className="card" style={{ textAlign: "center", padding: 40 }}>
+        <p style={{ color: "#aaa" }}>טוען פוסטים מאינסטגרם...</p>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="card" style={{ borderColor: "#f87171" }}>
+        <p style={{ color: "#f87171" }}>שגיאה: {error}</p>
+        <button className="btn btn-ghost" onClick={onCancel}>סגור</button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="card" style={{ borderColor: "#2563eb" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 16 }}>
+        <h3 style={{ color: "#fff" }}>בחר פוסט מהאינסטגרם שלך</h3>
+        <button className="btn btn-ghost btn-sm" onClick={onCancel}>x סגור</button>
+      </div>
+      <div className="post-grid">
+        {posts.map((post) => {
+          const alreadyAdded = existingMediaIds.includes(post.id);
+          return (
+            <div
+              key={post.id}
+              className={`post-card ${alreadyAdded ? "post-card-disabled" : ""}`}
+              onClick={() => !alreadyAdded && onSelect(post)}
+              title={alreadyAdded ? "כבר הוגדר" : "לחץ לבחור"}
+            >
+              {post.mediaUrl ? (
+                <img
+                  src={post.mediaUrl}
+                  alt={post.caption}
+                  className="post-image"
+                />
+              ) : (
+                <div className="post-image post-image-placeholder">
+                  {post.mediaType === "VIDEO" ? "Video" : "No image"}
+                </div>
+              )}
+              <div className="post-caption">
+                {post.caption ? post.caption.slice(0, 60) + (post.caption.length > 60 ? "..." : "") : "ללא כיתוב"}
+              </div>
+              <div className="post-date">
+                {new Date(post.timestamp).toLocaleDateString("he-IL")}
+              </div>
+              {alreadyAdded && <div className="post-badge">כבר מוגדר</div>}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ========== Post Form — configure a selected post ==========
+function PostForm({
+  igPost,
+  onSave,
+  onCancel,
+}: {
+  igPost: InstagramPost;
+  onSave: () => void;
+  onCancel: () => void;
+}) {
+  const postName = igPost.caption
+    ? igPost.caption.slice(0, 30) + (igPost.caption.length > 30 ? "..." : "")
+    : `Post ${igPost.id}`;
   const [replyMessage, setReplyMessage] = useState("");
   const [dmMessage, setDmMessage] = useState("");
   const [sendDM, setSendDM] = useState(true);
@@ -306,8 +432,8 @@ function PostForm({ onSave, onCancel }: { onSave: () => void; onCancel: () => vo
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        mediaId,
-        name,
+        mediaId: igPost.id,
+        name: postName,
         enabled: true,
         keywords,
         replyMessage,
@@ -321,17 +447,20 @@ function PostForm({ onSave, onCancel }: { onSave: () => void; onCancel: () => vo
 
   return (
     <div className="card" style={{ borderColor: "#2563eb" }}>
-      <h3 style={{ marginBottom: 16, color: "#fff" }}>פוסט חדש</h3>
-      <div className="form-row">
-        <div className="form-group">
-          <label>שם הפוסט (לזיהוי שלך)</label>
-          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="למשל: מבצע קיץ" />
-        </div>
-        <div className="form-group">
-          <label>Media ID (מזהה הפוסט באינסטגרם)</label>
-          <input value={mediaId} onChange={(e) => setMediaId(e.target.value)} placeholder="12345678..." />
+      <div style={{ display: "flex", gap: 16, marginBottom: 16 }}>
+        {igPost.mediaUrl && (
+          <img
+            src={igPost.mediaUrl}
+            alt=""
+            style={{ width: 80, height: 80, objectFit: "cover", borderRadius: 8 }}
+          />
+        )}
+        <div>
+          <h3 style={{ color: "#fff" }}>{postName}</h3>
+          <span style={{ fontSize: 12, color: "#666" }}>Media ID: {igPost.id}</span>
         </div>
       </div>
+
       <div className="form-group">
         <label>מילות מפתח (אופציונלי - תגובה רק כשמישהו כותב את המילה)</label>
         <div className="keyword-input">
