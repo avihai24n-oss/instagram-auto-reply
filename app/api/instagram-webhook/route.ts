@@ -100,11 +100,18 @@ async function handleComment(
   if (from.id === myUserId) return;
 
   console.log(`Comment from @${from.username} on media ${media.id}: "${text}"`);
+  console.log(`Config has ${config.posts.length} posts, ${config.keywordTriggers.length} keyword triggers`);
+  console.log(`Configured post mediaIds: ${config.posts.map(p => p.mediaId).join(", ")}`);
+  console.log(`Webhook media.id: "${media.id}"`);
 
   // 1. Check if there's a specific post config for this media
   const postConfig = config.posts.find(
     (p) => p.enabled && p.mediaId === media.id
   );
+  console.log(`Post config match: ${postConfig ? postConfig.name : "NONE"}`);
+  if (postConfig) {
+    console.log(`Post keywords: ${JSON.stringify(postConfig.keywords)}, replyMessage: "${postConfig.replyMessage}"`);
+  }
 
   if (postConfig) {
     // If post has keywords, check if comment matches
