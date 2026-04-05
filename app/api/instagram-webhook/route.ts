@@ -155,11 +155,8 @@ async function handleComment(
     return;
   }
 
-  // 3. Use default messages
-  await Promise.allSettled([
-    replyToComment(commentId, config.globalSettings.defaultReplyMessage, from.username),
-    sendDirectMessage(from.id, config.globalSettings.defaultDMMessage, config.quickReplies),
-  ]);
+  // No matching post config or keyword — do nothing
+  console.log(`No matching rule for comment ${commentId}, skipping`);
 }
 
 // ========== Incoming DM Handler ==========
