@@ -5,6 +5,9 @@ const ACCESS_TOKEN = process.env.INSTAGRAM_ACCESS_TOKEN!;
 const GRAPH_API = "https://graph.instagram.com/v21.0";
 const BOT_ENABLED = process.env.BOT_ENABLED !== "false"; // enabled by default
 
+// Track processed comment IDs to prevent duplicate replies
+const processedComments = new Set<string>();
+
 // GET — Webhook verification (Meta sends this to verify your endpoint)
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams;
@@ -60,6 +63,7 @@ async function handleComment(commentData: {
   text: string;
   from: { id: string; username: string };
   media: { id: string };
+  parent_id?: string;
 }) {
   const { id: commentId, from, media } = commentData;
   const senderId = from.id;
@@ -69,7 +73,20 @@ async function handleComment(commentData: {
     `New comment from @${senderUsername} (${senderId}) on media ${media.id}`
   );
 
-  // Don't reply to our own comments (get our own user ID first)
+  // Skip if this is a reply to another comment (not a top-level comment)
+  if (commentData.parent_id) {
+    console.log("Skipping — this is a reply to a comment, not a top-level comment");
+    return;
+  }
+
+  // Skip if we already processed this comment
+  if (processedComments.has(commentId)) {
+    console.log("Skipping — already processed this comment");
+    return;
+  }
+  processedComments.add(commentId);
+
+  // Don't reply to our own comments
   const myUserId = await getMyUserId();
   if (senderId === myUserId) {
     console.log("Skipping — this is our own comment");
