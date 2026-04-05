@@ -1,6 +1,11 @@
-import { kv } from "@vercel/kv";
+import { createClient } from "@supabase/supabase-js";
 
-const CONFIG_KEY = "app-config";
+const supabase = createClient(
+  process.env.SUPABASE_URL!,
+  process.env.SUPABASE_SERVICE_KEY!
+);
+
+const CONFIG_ID = "main";
 
 export interface PostConfig {
   id: string;
@@ -72,16 +77,27 @@ const DEFAULT_CONFIG: AppConfig = {
 };
 
 export async function getConfig(): Promise<AppConfig> {
-  const config = await kv.get<AppConfig>(CONFIG_KEY);
-  if (!config) {
-    await kv.set(CONFIG_KEY, DEFAULT_CONFIG);
+  const { data, error } = await supabase
+    .from("bot_config")
+    .select("config")
+    .eq("id", CONFIG_ID)
+    .single();
+
+  if (error || !data) {
+    // First time — insert default config
+    await supabase
+      .from("bot_config")
+      .upsert({ id: CONFIG_ID, config: DEFAULT_CONFIG });
     return DEFAULT_CONFIG;
   }
-  return config;
+
+  return data.config as AppConfig;
 }
 
 export async function saveConfig(config: AppConfig): Promise<void> {
-  await kv.set(CONFIG_KEY, config);
+  await supabase
+    .from("bot_config")
+    .upsert({ id: CONFIG_ID, config });
 }
 
 export function generateId(): string {
