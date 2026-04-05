@@ -1,0 +1,17 @@
+{
+  "globalSettings": {
+    "botEnabled": true,
+    "defaultReplyMessage": "תודה על התגובה! 🙏",
+    "defaultDMMessage": "היי! תודה שהגבת 💬 איך אפשר לעזור?"
+  },
+  "posts": [],
+  "keywordTriggers": [],
+  "quickReplies": {
+    "enabled": false,
+    "options": []
+  },
+  "welcomeMessage": {
+    "enabled": false,
+    "message": "היי! תודה שעקבת 🎉 איך אפשר לעזור?"
+  }
+}

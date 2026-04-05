@@ -1,15 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
-import { triggerRules, TriggerRule } from "@/app/config/triggers";
+import { getConfig, AppConfig, KeywordTrigger } from "@/lib/config";
 
-const VERIFY_TOKEN = process.env.VERIFY_TOKEN!;
 const ACCESS_TOKEN = process.env.INSTAGRAM_ACCESS_TOKEN!;
+const VERIFY_TOKEN = process.env.VERIFY_TOKEN!;
 const GRAPH_API = "https://graph.instagram.com/v21.0";
-const BOT_ENABLED = process.env.BOT_ENABLED !== "false"; // enabled by default
 
-// Track processed comment IDs to prevent duplicate replies
+// Track processed IDs to prevent duplicate replies
 const processedComments = new Set<string>();
+const processedMessages = new Set<string>();
 
-// GET — Webhook verification (Meta sends this to verify your endpoint)
+let cachedUserId: string | null = null;
+
+// GET — Webhook verification
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams;
   const mode = searchParams.get("hub.mode");
@@ -29,129 +31,221 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    console.log("Webhook event received:", JSON.stringify(body, null, 2));
+    console.log("Webhook event:", JSON.stringify(body, null, 2));
 
-    if (!BOT_ENABLED) {
+    const config = await getConfig();
+
+    if (!config.globalSettings.botEnabled) {
       console.log("Bot is disabled");
       return NextResponse.json({ status: "disabled" }, { status: 200 });
     }
 
-    // Process each entry from the webhook payload
     if (body.entry) {
       for (const entry of body.entry) {
-        // Handle comment events
+        // Handle comment & mention events
         if (entry.changes) {
           for (const change of entry.changes) {
             if (change.field === "comments") {
-              await handleComment(change.value);
+              await handleComment(change.value, config);
+            }
+            if (change.field === "mentions") {
+              console.log("Story mention received:", change.value);
+            }
+          }
+        }
+
+        // Handle messaging events (DMs, postbacks)
+        if (entry.messaging) {
+          for (const event of entry.messaging) {
+            if (event.message) {
+              await handleIncomingMessage(event, config);
+            }
+            if (event.postback) {
+              await handlePostback(event, config);
             }
           }
         }
       }
     }
 
-    // Always return 200 quickly to acknowledge receipt
     return NextResponse.json({ status: "ok" }, { status: 200 });
   } catch (error) {
     console.error("Error processing webhook:", error);
-    // Still return 200 to prevent Meta from retrying
     return NextResponse.json({ status: "ok" }, { status: 200 });
   }
 }
 
-// Find the first matching trigger rule for a comment
-function findMatchingRule(
-  commentText: string,
-  mediaId: string
-): TriggerRule | null {
-  const lowerText = commentText.toLowerCase();
+// ========== Comment Handler ==========
+async function handleComment(
+  commentData: {
+    id: string;
+    text: string;
+    from: { id: string; username: string };
+    media: { id: string };
+    parent_id?: string;
+  },
+  config: AppConfig
+) {
+  const { id: commentId, text, from, media } = commentData;
 
-  for (const rule of triggerRules) {
-    if (!rule.enabled) continue;
+  // Skip replies to comments
+  if (commentData.parent_id) return;
 
-    // Check if mediaId matches (if specified)
-    if (rule.mediaId && rule.mediaId !== mediaId) continue;
-
-    // Check keywords (empty keywords = match any comment)
-    if (rule.keywords.length === 0) return rule;
-
-    const hasKeyword = rule.keywords.some((keyword) =>
-      lowerText.includes(keyword.toLowerCase())
-    );
-    if (hasKeyword) return rule;
-  }
-
-  return null;
-}
-
-async function handleComment(commentData: {
-  id: string;
-  text: string;
-  from: { id: string; username: string };
-  media: { id: string };
-  parent_id?: string;
-}) {
-  const { id: commentId, text: commentText, from, media } = commentData;
-  const senderId = from.id;
-  const senderUsername = from.username;
-
-  console.log(
-    `New comment from @${senderUsername}: "${commentText}" on media ${media.id}`
-  );
-
-  // Skip if this is a reply to another comment (not a top-level comment)
-  if (commentData.parent_id) {
-    console.log("Skipping — this is a reply to a comment, not a top-level comment");
-    return;
-  }
-
-  // Skip if we already processed this comment
-  if (processedComments.has(commentId)) {
-    console.log("Skipping — already processed this comment");
-    return;
-  }
+  // Skip already processed
+  if (processedComments.has(commentId)) return;
   processedComments.add(commentId);
 
-  // Don't reply to our own comments
+  // Don't reply to ourselves
   const myUserId = await getMyUserId();
-  if (senderId === myUserId) {
-    console.log("Skipping — this is our own comment");
+  if (from.id === myUserId) return;
+
+  console.log(`Comment from @${from.username} on media ${media.id}: "${text}"`);
+
+  // 1. Check if there's a specific post config for this media
+  const postConfig = config.posts.find(
+    (p) => p.enabled && p.mediaId === media.id
+  );
+
+  if (postConfig) {
+    // If post has keywords, check if comment matches
+    if (postConfig.keywords.length > 0) {
+      const lowerText = text.toLowerCase();
+      const matched = postConfig.keywords.some((kw) =>
+        lowerText.includes(kw.toLowerCase())
+      );
+      if (!matched) {
+        console.log("Comment doesn't match post keywords, skipping");
+        return;
+      }
+    }
+
+    // Use post-specific messages
+    const actions: Promise<void>[] = [
+      replyToComment(commentId, postConfig.replyMessage, from.username),
+    ];
+    if (postConfig.sendDM) {
+      actions.push(
+        sendDirectMessage(from.id, postConfig.dmMessage, config.quickReplies)
+      );
+    }
+    await Promise.allSettled(actions);
     return;
   }
 
-  // Find a matching trigger rule
-  const rule = findMatchingRule(commentText, media.id);
-  if (!rule) {
-    console.log("No matching trigger rule found — skipping");
+  // 2. Check global keyword triggers
+  const matchedKeyword = findMatchingKeyword(text, config.keywordTriggers);
+  if (matchedKeyword) {
+    const actions: Promise<void>[] = [
+      replyToComment(commentId, matchedKeyword.replyMessage, from.username),
+    ];
+    if (matchedKeyword.sendDM) {
+      actions.push(
+        sendDirectMessage(from.id, matchedKeyword.dmMessage, config.quickReplies)
+      );
+    }
+    await Promise.allSettled(actions);
     return;
   }
 
-  console.log(`Matched trigger rule: "${rule.id}"`);
-
-  // Run both actions in parallel: reply to comment + send DM
+  // 3. Use default messages
   await Promise.allSettled([
-    replyToComment(commentId, senderUsername, rule.commentReply),
-    sendDirectMessage(senderId, rule.dmMessage),
+    replyToComment(commentId, config.globalSettings.defaultReplyMessage, from.username),
+    sendDirectMessage(from.id, config.globalSettings.defaultDMMessage, config.quickReplies),
   ]);
 }
 
+// ========== Incoming DM Handler ==========
+async function handleIncomingMessage(
+  event: {
+    sender: { id: string };
+    recipient: { id: string };
+    message: { mid: string; text?: string };
+  },
+  config: AppConfig
+) {
+  const { sender, message } = event;
+
+  if (processedMessages.has(message.mid)) return;
+  processedMessages.add(message.mid);
+
+  const myUserId = await getMyUserId();
+  if (sender.id === myUserId) return;
+
+  console.log(`DM from ${sender.id}: "${message.text}"`);
+
+  // Check if message matches any keyword trigger
+  if (message.text) {
+    const matchedKeyword = findMatchingKeyword(message.text, config.keywordTriggers);
+    if (matchedKeyword) {
+      await sendDirectMessage(sender.id, matchedKeyword.dmMessage, config.quickReplies);
+      return;
+    }
+  }
+
+  // Welcome message for new conversations
+  if (config.welcomeMessage.enabled && message.text) {
+    await sendDirectMessage(sender.id, config.welcomeMessage.message, config.quickReplies);
+  }
+}
+
+// ========== Postback Handler (Quick Reply clicks) ==========
+async function handlePostback(
+  event: {
+    sender: { id: string };
+    postback: { title: string; payload: string };
+  },
+  config: AppConfig
+) {
+  const { sender, postback } = event;
+  console.log(`Postback from ${sender.id}: ${postback.payload}`);
+
+  // Match payload to a keyword trigger
+  const matchedKeyword = config.keywordTriggers.find(
+    (k) => k.enabled && k.keyword.toLowerCase() === postback.payload.toLowerCase()
+  );
+
+  if (matchedKeyword) {
+    await sendDirectMessage(sender.id, matchedKeyword.dmMessage, config.quickReplies);
+  }
+}
+
+// ========== Helper Functions ==========
+
+function findMatchingKeyword(
+  text: string,
+  triggers: KeywordTrigger[]
+): KeywordTrigger | undefined {
+  const lowerText = text.toLowerCase();
+  return triggers.find((trigger) => {
+    if (!trigger.enabled) return false;
+    const kw = trigger.keyword.toLowerCase();
+    if (trigger.matchExact) {
+      const regex = new RegExp(`(^|\\s)${escapeRegex(kw)}($|\\s)`);
+      return regex.test(lowerText);
+    }
+    return lowerText.includes(kw);
+  });
+}
+
+function escapeRegex(str: string): string {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 async function getMyUserId(): Promise<string> {
+  if (cachedUserId) return cachedUserId;
   const res = await fetch(`${GRAPH_API}/me?fields=id&access_token=${ACCESS_TOKEN}`);
   const data = await res.json();
+  cachedUserId = data.id;
   return data.id;
 }
 
-async function replyToComment(commentId: string, username: string, message: string) {
+async function replyToComment(commentId: string, message: string, username: string) {
   try {
     const res = await fetch(`${GRAPH_API}/${commentId}/replies`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        message,
-        access_token: ACCESS_TOKEN,
-      }),
+      body: JSON.stringify({ message, access_token: ACCESS_TOKEN }),
     });
-
     const data = await res.json();
     if (data.error) {
       console.error("Error replying to comment:", data.error);
@@ -163,16 +257,32 @@ async function replyToComment(commentId: string, username: string, message: stri
   }
 }
 
-async function sendDirectMessage(recipientId: string, message: string) {
+async function sendDirectMessage(
+  recipientId: string,
+  message: string,
+  quickRepliesConfig: AppConfig["quickReplies"]
+) {
   try {
     const myUserId = await getMyUserId();
+
+    // Build message payload
+    const messagePayload: Record<string, unknown> = { text: message };
+
+    // Add quick replies if enabled
+    if (quickRepliesConfig.enabled && quickRepliesConfig.options.length > 0) {
+      messagePayload.quick_replies = quickRepliesConfig.options.map((opt) => ({
+        content_type: "text",
+        title: opt.title,
+        payload: opt.payload,
+      }));
+    }
 
     const res = await fetch(`${GRAPH_API}/${myUserId}/messages`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         recipient: { id: recipientId },
-        message: { text: message },
+        message: messagePayload,
         access_token: ACCESS_TOKEN,
       }),
     });
@@ -181,7 +291,7 @@ async function sendDirectMessage(recipientId: string, message: string) {
     if (data.error) {
       console.error("Error sending DM:", data.error);
     } else {
-      console.log(`DM sent to user ${recipientId}`);
+      console.log(`DM sent to ${recipientId}`);
     }
   } catch (error) {
     console.error("Failed to send DM:", error);

@@ -1,5 +1,7 @@
+import "./globals.css";
+
 export const metadata = {
-  title: "Instagram Auto Reply Bot",
+  title: "Instagram Bot Dashboard",
 };
 
 export default function RootLayout({
