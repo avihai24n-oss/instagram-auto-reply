@@ -46,6 +46,7 @@ export async function POST(request: NextRequest) {
         if (entry.changes) {
           for (const change of entry.changes) {
             if (change.field === "comments") {
+              console.log("COMMENT DATA:", JSON.stringify(change.value));
               await handleComment(change.value, config);
             }
             if (change.field === "mentions") {
