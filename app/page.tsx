@@ -3,14 +3,28 @@
 import { useState, useEffect, useCallback } from "react";
 import "./globals.css";
 
+interface FlowButton {
+  type: "url" | "postback";
+  title: string;
+  url?: string;
+  nextStepIndex?: number;
+}
+
+interface FlowStep {
+  text: string;
+  buttons: FlowButton[];
+}
+
 interface PostConfig {
   id: string;
   mediaId: string;
+  permalink?: string;
   name: string;
   enabled: boolean;
   keywords: string[];
   replyMessage: string;
   dmMessage: string;
+  dmFlow: FlowStep[];
   sendDM: boolean;
   quickReplies: { title: string; payload: string }[];
 }
@@ -21,6 +35,7 @@ interface KeywordTrigger {
   enabled: boolean;
   replyMessage: string;
   dmMessage: string;
+  dmFlow: FlowStep[];
   sendDM: boolean;
   matchExact: boolean;
 }
@@ -44,6 +59,7 @@ interface AppConfig {
 }
 
 const TABS = [
+  { id: "manage", label: "ניהול" },
   { id: "general", label: "הגדרות כלליות" },
   { id: "posts", label: "פוסטים ספציפיים" },
   { id: "keywords", label: "מילות מפתח" },
@@ -53,7 +69,7 @@ const TABS = [
 
 export default function Dashboard() {
   const [config, setConfig] = useState<AppConfig | null>(null);
-  const [activeTab, setActiveTab] = useState("general");
+  const [activeTab, setActiveTab] = useState("manage");
   const [toast, setToast] = useState("");
 
   const loadConfig = useCallback(async () => {
@@ -114,6 +130,15 @@ export default function Dashboard() {
         ))}
       </div>
 
+      {activeTab === "manage" && (
+        <ManageTab
+          posts={config.posts}
+          keywords={config.keywordTriggers}
+          onRefresh={loadConfig}
+          onToast={showToast}
+          onGoTo={(tab) => setActiveTab(tab)}
+        />
+      )}
       {activeTab === "general" && (
         <GeneralTab config={config} onSave={saveGlobal} />
       )}
@@ -178,6 +203,239 @@ function GeneralTab({
   );
 }
 
+// ========== Flow Builder — reusable component ==========
+function FlowBuilder({
+  flow,
+  onChange,
+  maxSteps = 3,
+}: {
+  flow: FlowStep[];
+  onChange: (newFlow: FlowStep[]) => void;
+  maxSteps?: number;
+}) {
+  // Ensure we always have at least step 0
+  const steps = flow.length > 0 ? flow : [{ text: "", buttons: [] }];
+
+  const updateStep = (index: number, updates: Partial<FlowStep>) => {
+    const newSteps = [...steps];
+    newSteps[index] = { ...newSteps[index], ...updates };
+    onChange(newSteps);
+  };
+
+  const addStep = () => {
+    if (steps.length >= maxSteps) return;
+    onChange([...steps, { text: "", buttons: [] }]);
+  };
+
+  const removeStep = (index: number) => {
+    if (index === 0) return; // can't remove first step
+    const newSteps = steps.filter((_, i) => i !== index);
+    // Fix any buttons pointing to this removed step
+    newSteps.forEach((s) => {
+      s.buttons = s.buttons.map((b) => {
+        if (b.type === "postback" && b.nextStepIndex !== undefined) {
+          if (b.nextStepIndex === index) return { ...b, nextStepIndex: undefined };
+          if (b.nextStepIndex > index)
+            return { ...b, nextStepIndex: b.nextStepIndex - 1 };
+        }
+        return b;
+      });
+    });
+    onChange(newSteps);
+  };
+
+  const addButton = (stepIndex: number) => {
+    const step = steps[stepIndex];
+    if (step.buttons.length >= 3) return;
+    updateStep(stepIndex, {
+      buttons: [...step.buttons, { type: "postback", title: "", nextStepIndex: undefined }],
+    });
+  };
+
+  const updateButton = (
+    stepIndex: number,
+    btnIndex: number,
+    updates: Partial<FlowButton>
+  ) => {
+    const step = steps[stepIndex];
+    const newButtons = [...step.buttons];
+    newButtons[btnIndex] = { ...newButtons[btnIndex], ...updates };
+    updateStep(stepIndex, { buttons: newButtons });
+  };
+
+  const removeButton = (stepIndex: number, btnIndex: number) => {
+    const step = steps[stepIndex];
+    updateStep(stepIndex, { buttons: step.buttons.filter((_, i) => i !== btnIndex) });
+  };
+
+  return (
+    <div>
+      {steps.map((step, stepIdx) => (
+        <div className="flow-step" key={stepIdx}>
+          <div className="flow-step-header">
+            <span>שלב {stepIdx + 1}{stepIdx === 0 ? " (הודעה ראשונה)" : ""}</span>
+            {stepIdx > 0 && (
+              <button
+                className="btn btn-danger btn-sm"
+                onClick={() => removeStep(stepIdx)}
+                type="button"
+              >
+                מחק שלב
+              </button>
+            )}
+          </div>
+          <div className="form-group" style={{ marginBottom: 8 }}>
+            <label>טקסט ההודעה (עד 640 תווים)</label>
+            <textarea
+              value={step.text}
+              maxLength={640}
+              onChange={(e) => updateStep(stepIdx, { text: e.target.value })}
+              placeholder="תוכן ההודעה שתישלח"
+            />
+          </div>
+
+          {step.buttons.map((btn, btnIdx) => (
+            <div className="flow-button" key={btnIdx}>
+              <div className="flow-button-row">
+                <select
+                  value={btn.type}
+                  onChange={(e) =>
+                    updateButton(stepIdx, btnIdx, {
+                      type: e.target.value as "url" | "postback",
+                      url: undefined,
+                      nextStepIndex: undefined,
+                    })
+                  }
+                >
+                  <option value="postback">כפתור שלב הבא</option>
+                  <option value="url">כפתור קישור</option>
+                </select>
+                <input
+                  placeholder="טקסט הכפתור (עד 20 תווים)"
+                  maxLength={20}
+                  value={btn.title}
+                  onChange={(e) =>
+                    updateButton(stepIdx, btnIdx, { title: e.target.value })
+                  }
+                />
+                {btn.type === "url" ? (
+                  <input
+                    placeholder="https://..."
+                    value={btn.url || ""}
+                    onChange={(e) =>
+                      updateButton(stepIdx, btnIdx, { url: e.target.value })
+                    }
+                  />
+                ) : (
+                  <select
+                    value={btn.nextStepIndex ?? ""}
+                    onChange={(e) =>
+                      updateButton(stepIdx, btnIdx, {
+                        nextStepIndex:
+                          e.target.value === "" ? undefined : Number(e.target.value),
+                      })
+                    }
+                  >
+                    <option value="">בחר שלב...</option>
+                    {steps.map((_, i) =>
+                      i !== stepIdx ? (
+                        <option key={i} value={i}>
+                          שלב {i + 1}
+                        </option>
+                      ) : null
+                    )}
+                  </select>
+                )}
+                <button
+                  type="button"
+                  className="btn btn-danger btn-sm"
+                  onClick={() => removeButton(stepIdx, btnIdx)}
+                >
+                  x
+                </button>
+              </div>
+            </div>
+          ))}
+
+          {step.buttons.length < 3 && (
+            <button
+              type="button"
+              className="flow-add-btn"
+              style={{ marginTop: 8 }}
+              onClick={() => addButton(stepIdx)}
+            >
+              + הוסף כפתור (עד 3)
+            </button>
+          )}
+        </div>
+      ))}
+
+      {steps.length < maxSteps && (
+        <button type="button" className="flow-add-btn" onClick={addStep}>
+          + הוסף שלב הבא (עד {maxSteps} שלבים)
+        </button>
+      )}
+    </div>
+  );
+}
+
+// ========== Message Editor — chooses between simple text or flow ==========
+function MessageEditor({
+  dmMessage,
+  dmFlow,
+  onChangeText,
+  onChangeFlow,
+}: {
+  dmMessage: string;
+  dmFlow: FlowStep[];
+  onChangeText: (t: string) => void;
+  onChangeFlow: (f: FlowStep[]) => void;
+}) {
+  const [mode, setMode] = useState<"text" | "flow">(
+    dmFlow.length > 0 ? "flow" : "text"
+  );
+
+  return (
+    <div>
+      <div className="flow-toggle">
+        <button
+          type="button"
+          className={mode === "text" ? "active" : ""}
+          onClick={() => {
+            setMode("text");
+            onChangeFlow([]);
+          }}
+        >
+          טקסט פשוט
+        </button>
+        <button
+          type="button"
+          className={mode === "flow" ? "active" : ""}
+          onClick={() => {
+            setMode("flow");
+            if (dmFlow.length === 0) onChangeFlow([{ text: dmMessage, buttons: [] }]);
+          }}
+        >
+          הודעה עם כפתורים
+        </button>
+      </div>
+
+      {mode === "text" ? (
+        <div className="form-group">
+          <label>הודעה פרטית (DM)</label>
+          <textarea
+            value={dmMessage}
+            onChange={(e) => onChangeText(e.target.value)}
+            placeholder="ההודעה שתישלח בפרטי"
+          />
+        </div>
+      ) : (
+        <FlowBuilder flow={dmFlow} onChange={onChangeFlow} />
+      )}
+    </div>
+  );
+}
+
 // ========== Instagram Post type ==========
 interface InstagramPost {
   id: string;
@@ -200,6 +458,7 @@ function PostsTab({
 }) {
   const [showPicker, setShowPicker] = useState(false);
   const [selectedPost, setSelectedPost] = useState<InstagramPost | null>(null);
+  const [editingPost, setEditingPost] = useState<PostConfig | null>(null);
 
   const deletePost = async (id: string) => {
     await fetch("/api/config/posts", {
@@ -256,6 +515,18 @@ function PostsTab({
         />
       )}
 
+      {editingPost && (
+        <PostEditForm
+          post={editingPost}
+          onSave={() => {
+            setEditingPost(null);
+            onRefresh();
+            onToast("עודכן!");
+          }}
+          onCancel={() => setEditingPost(null)}
+        />
+      )}
+
       {posts.length === 0 && !showPicker && !selectedPost && (
         <div className="empty">
           <p>אין פוסטים מוגדרים עדיין</p>
@@ -295,10 +566,11 @@ function PostsTab({
           <div style={{ fontSize: 13, color: "#aaa", marginBottom: 4 }}>
             תגובה: {post.replyMessage}
           </div>
-          {post.sendDM && (
-            <div style={{ fontSize: 13, color: "#aaa" }}>DM: {post.dmMessage}</div>
-          )}
+          {post.sendDM && <FlowSummary dmMessage={post.dmMessage} dmFlow={post.dmFlow || []} />}
           <div className="actions">
+            <button className="btn btn-ghost btn-sm" onClick={() => setEditingPost(post)}>
+              ערוך
+            </button>
             <button className="btn btn-danger btn-sm" onClick={() => deletePost(post.id)}>
               מחק
             </button>
@@ -309,7 +581,34 @@ function PostsTab({
   );
 }
 
-// ========== Post Picker — shows real Instagram posts ==========
+// ========== Flow summary for list views ==========
+function FlowSummary({ dmMessage, dmFlow }: { dmMessage: string; dmFlow: FlowStep[] }) {
+  if (dmFlow && dmFlow.length > 0) {
+    return (
+      <div style={{ fontSize: 13, color: "#aaa" }}>
+        <div>DM: {dmFlow[0].text}</div>
+        {dmFlow[0].buttons.length > 0 && (
+          <div style={{ marginTop: 4 }}>
+            {dmFlow[0].buttons.map((b, i) => (
+              <span key={i} className="flow-preview-btn">
+                {b.type === "url" ? "🔗 " : "▶ "}
+                {b.title}
+              </span>
+            ))}
+          </div>
+        )}
+        {dmFlow.length > 1 && (
+          <div style={{ fontSize: 11, color: "#666", marginTop: 4 }}>
+            {dmFlow.length} שלבי flow
+          </div>
+        )}
+      </div>
+    );
+  }
+  return <div style={{ fontSize: 13, color: "#aaa" }}>DM: {dmMessage}</div>;
+}
+
+// ========== Post Picker ==========
 function PostPicker({
   existingMediaIds,
   onSelect,
@@ -376,11 +675,7 @@ function PostPicker({
               title={alreadyAdded ? "כבר הוגדר" : "לחץ לבחור"}
             >
               {post.mediaUrl ? (
-                <img
-                  src={post.mediaUrl}
-                  alt={post.caption}
-                  className="post-image"
-                />
+                <img src={post.mediaUrl} alt={post.caption} className="post-image" />
               ) : (
                 <div className="post-image post-image-placeholder">
                   {post.mediaType === "VIDEO" ? "Video" : "No image"}
@@ -401,7 +696,7 @@ function PostPicker({
   );
 }
 
-// ========== Post Form — configure a selected post ==========
+// ========== Post Form ==========
 function PostForm({
   igPost,
   onSave,
@@ -416,6 +711,7 @@ function PostForm({
     : `Post ${igPost.id}`;
   const [replyMessage, setReplyMessage] = useState("");
   const [dmMessage, setDmMessage] = useState("");
+  const [dmFlow, setDmFlow] = useState<FlowStep[]>([]);
   const [sendDM, setSendDM] = useState(true);
   const [keywords, setKeywords] = useState<string[]>([]);
   const [kwInput, setKwInput] = useState("");
@@ -439,6 +735,7 @@ function PostForm({
         keywords,
         replyMessage,
         dmMessage,
+        dmFlow,
         sendDM,
         quickReplies: [],
       }),
@@ -493,10 +790,12 @@ function PostForm({
         <label>שלח גם הודעה פרטית (DM)</label>
       </div>
       {sendDM && (
-        <div className="form-group">
-          <label>הודעה פרטית (DM)</label>
-          <textarea value={dmMessage} onChange={(e) => setDmMessage(e.target.value)} placeholder="ההודעה שתישלח בפרטי" />
-        </div>
+        <MessageEditor
+          dmMessage={dmMessage}
+          dmFlow={dmFlow}
+          onChangeText={setDmMessage}
+          onChangeFlow={setDmFlow}
+        />
       )}
       <div className="actions">
         <button className="btn btn-primary" onClick={submit}>שמור פוסט</button>
@@ -517,6 +816,7 @@ function KeywordsTab({
   onToast: (m: string) => void;
 }) {
   const [showForm, setShowForm] = useState(false);
+  const [editingKeyword, setEditingKeyword] = useState<KeywordTrigger | null>(null);
 
   const deleteKeyword = async (id: string) => {
     await fetch("/api/config/keywords", {
@@ -560,6 +860,18 @@ function KeywordsTab({
         />
       )}
 
+      {editingKeyword && (
+        <KeywordEditForm
+          kw={editingKeyword}
+          onSave={() => {
+            setEditingKeyword(null);
+            onRefresh();
+            onToast("עודכן!");
+          }}
+          onCancel={() => setEditingKeyword(null)}
+        />
+      )}
+
       {keywords.length === 0 && !showForm && (
         <div className="empty">
           <p>אין מילות מפתח מוגדרות</p>
@@ -590,10 +902,9 @@ function KeywordsTab({
           <div style={{ fontSize: 13, color: "#aaa", marginBottom: 4 }}>
             תגובה: {kw.replyMessage}
           </div>
-          {kw.sendDM && (
-            <div style={{ fontSize: 13, color: "#aaa" }}>DM: {kw.dmMessage}</div>
-          )}
+          {kw.sendDM && <FlowSummary dmMessage={kw.dmMessage} dmFlow={kw.dmFlow || []} />}
           <div className="actions">
+            <button className="btn btn-ghost btn-sm" onClick={() => setEditingKeyword(kw)}>ערוך</button>
             <button className="btn btn-danger btn-sm" onClick={() => deleteKeyword(kw.id)}>מחק</button>
           </div>
         </div>
@@ -606,6 +917,7 @@ function KeywordForm({ onSave, onCancel }: { onSave: () => void; onCancel: () =>
   const [keyword, setKeyword] = useState("");
   const [replyMessage, setReplyMessage] = useState("");
   const [dmMessage, setDmMessage] = useState("");
+  const [dmFlow, setDmFlow] = useState<FlowStep[]>([]);
   const [sendDM, setSendDM] = useState(true);
   const [matchExact, setMatchExact] = useState(false);
 
@@ -613,7 +925,15 @@ function KeywordForm({ onSave, onCancel }: { onSave: () => void; onCancel: () =>
     await fetch("/api/config/keywords", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ keyword, enabled: true, replyMessage, dmMessage, sendDM, matchExact }),
+      body: JSON.stringify({
+        keyword,
+        enabled: true,
+        replyMessage,
+        dmMessage,
+        dmFlow,
+        sendDM,
+        matchExact,
+      }),
     });
     onSave();
   };
@@ -638,10 +958,12 @@ function KeywordForm({ onSave, onCancel }: { onSave: () => void; onCancel: () =>
         <label>שלח גם הודעה פרטית (DM)</label>
       </div>
       {sendDM && (
-        <div className="form-group">
-          <label>הודעה פרטית (DM)</label>
-          <textarea value={dmMessage} onChange={(e) => setDmMessage(e.target.value)} />
-        </div>
+        <MessageEditor
+          dmMessage={dmMessage}
+          dmFlow={dmFlow}
+          onChangeText={setDmMessage}
+          onChangeFlow={setDmFlow}
+        />
       )}
       <div className="actions">
         <button className="btn btn-primary" onClick={submit}>שמור</button>
@@ -780,6 +1102,376 @@ function WelcomeTab({
       >
         שמור שינויים
       </button>
+    </div>
+  );
+}
+
+// ========== Post Edit Form ==========
+function PostEditForm({
+  post,
+  onSave,
+  onCancel,
+}: {
+  post: PostConfig;
+  onSave: () => void;
+  onCancel: () => void;
+}) {
+  const [name, setName] = useState(post.name);
+  const [replyMessage, setReplyMessage] = useState(post.replyMessage);
+  const [dmMessage, setDmMessage] = useState(post.dmMessage);
+  const [dmFlow, setDmFlow] = useState<FlowStep[]>(post.dmFlow || []);
+  const [sendDM, setSendDM] = useState(post.sendDM);
+  const [keywords, setKeywords] = useState<string[]>(post.keywords);
+  const [kwInput, setKwInput] = useState("");
+
+  const addKeyword = () => {
+    if (kwInput.trim() && !keywords.includes(kwInput.trim())) {
+      setKeywords([...keywords, kwInput.trim()]);
+      setKwInput("");
+    }
+  };
+
+  const submit = async () => {
+    await fetch("/api/config/posts", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        ...post,
+        name,
+        keywords,
+        replyMessage,
+        dmMessage,
+        dmFlow,
+        sendDM,
+      }),
+    });
+    onSave();
+  };
+
+  return (
+    <div className="card" style={{ borderColor: "#f59e0b" }}>
+      <h3 style={{ color: "#fff", marginBottom: 16 }}>עריכת פוסט</h3>
+      <div className="form-group">
+        <label>שם הפוסט</label>
+        <input value={name} onChange={(e) => setName(e.target.value)} />
+      </div>
+      <div className="form-group">
+        <label>מילות מפתח (אופציונלי)</label>
+        <div className="keyword-input">
+          <input
+            value={kwInput}
+            onChange={(e) => setKwInput(e.target.value)}
+            placeholder="הקלד מילה ולחץ הוסף"
+            onKeyDown={(e) => e.key === "Enter" && (e.preventDefault(), addKeyword())}
+          />
+          <button className="btn btn-ghost btn-sm" onClick={addKeyword}>הוסף</button>
+        </div>
+        {keywords.length > 0 && (
+          <div className="tags">
+            {keywords.map((kw) => (
+              <span className="tag" key={kw}>
+                {kw}
+                <button onClick={() => setKeywords(keywords.filter((k) => k !== kw))}>x</button>
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
+      <div className="form-group">
+        <label>הודעת תגובה (Reply)</label>
+        <textarea value={replyMessage} onChange={(e) => setReplyMessage(e.target.value)} />
+      </div>
+      <div className="checkbox-group">
+        <input type="checkbox" checked={sendDM} onChange={(e) => setSendDM(e.target.checked)} />
+        <label>שלח גם הודעה פרטית (DM)</label>
+      </div>
+      {sendDM && (
+        <MessageEditor
+          dmMessage={dmMessage}
+          dmFlow={dmFlow}
+          onChangeText={setDmMessage}
+          onChangeFlow={setDmFlow}
+        />
+      )}
+      <div className="actions">
+        <button className="btn btn-primary" onClick={submit}>שמור שינויים</button>
+        <button className="btn btn-ghost" onClick={onCancel}>ביטול</button>
+      </div>
+    </div>
+  );
+}
+
+// ========== Keyword Edit Form ==========
+function KeywordEditForm({
+  kw,
+  onSave,
+  onCancel,
+}: {
+  kw: KeywordTrigger;
+  onSave: () => void;
+  onCancel: () => void;
+}) {
+  const [keyword, setKeyword] = useState(kw.keyword);
+  const [replyMessage, setReplyMessage] = useState(kw.replyMessage);
+  const [dmMessage, setDmMessage] = useState(kw.dmMessage);
+  const [dmFlow, setDmFlow] = useState<FlowStep[]>(kw.dmFlow || []);
+  const [sendDM, setSendDM] = useState(kw.sendDM);
+  const [matchExact, setMatchExact] = useState(kw.matchExact);
+
+  const submit = async () => {
+    await fetch("/api/config/keywords", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        ...kw,
+        keyword,
+        replyMessage,
+        dmMessage,
+        dmFlow,
+        sendDM,
+        matchExact,
+      }),
+    });
+    onSave();
+  };
+
+  return (
+    <div className="card" style={{ borderColor: "#f59e0b" }}>
+      <h3 style={{ color: "#fff", marginBottom: 16 }}>עריכת מילת מפתח</h3>
+      <div className="form-group">
+        <label>מילת מפתח</label>
+        <input value={keyword} onChange={(e) => setKeyword(e.target.value)} />
+      </div>
+      <div className="checkbox-group">
+        <input type="checkbox" checked={matchExact} onChange={(e) => setMatchExact(e.target.checked)} />
+        <label>התאמה מדויקת בלבד</label>
+      </div>
+      <div className="form-group">
+        <label>הודעת תגובה (Reply)</label>
+        <textarea value={replyMessage} onChange={(e) => setReplyMessage(e.target.value)} />
+      </div>
+      <div className="checkbox-group">
+        <input type="checkbox" checked={sendDM} onChange={(e) => setSendDM(e.target.checked)} />
+        <label>שלח גם הודעה פרטית (DM)</label>
+      </div>
+      {sendDM && (
+        <MessageEditor
+          dmMessage={dmMessage}
+          dmFlow={dmFlow}
+          onChangeText={setDmMessage}
+          onChangeFlow={setDmFlow}
+        />
+      )}
+      <div className="actions">
+        <button className="btn btn-primary" onClick={submit}>שמור שינויים</button>
+        <button className="btn btn-ghost" onClick={onCancel}>ביטול</button>
+      </div>
+    </div>
+  );
+}
+
+// ========== Manage Tab — unified view ==========
+function ManageTab({
+  posts,
+  keywords,
+  onRefresh,
+  onToast,
+  onGoTo,
+}: {
+  posts: PostConfig[];
+  keywords: KeywordTrigger[];
+  onRefresh: () => void;
+  onToast: (m: string) => void;
+  onGoTo: (tab: string) => void;
+}) {
+  const [filter, setFilter] = useState<"all" | "active" | "inactive">("all");
+  const [editingPost, setEditingPost] = useState<PostConfig | null>(null);
+  const [editingKeyword, setEditingKeyword] = useState<KeywordTrigger | null>(null);
+
+  const togglePost = async (post: PostConfig) => {
+    await fetch("/api/config/posts", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...post, enabled: !post.enabled }),
+    });
+    onRefresh();
+    onToast(post.enabled ? "הושהה" : "הופעל");
+  };
+
+  const toggleKeyword = async (kw: KeywordTrigger) => {
+    await fetch("/api/config/keywords", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...kw, enabled: !kw.enabled }),
+    });
+    onRefresh();
+    onToast(kw.enabled ? "הושהה" : "הופעל");
+  };
+
+  const deletePost = async (id: string) => {
+    if (!confirm("למחוק את הפוסט?")) return;
+    await fetch("/api/config/posts", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id }),
+    });
+    onRefresh();
+    onToast("נמחק!");
+  };
+
+  const deleteKeyword = async (id: string) => {
+    if (!confirm("למחוק את מילת המפתח?")) return;
+    await fetch("/api/config/keywords", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id }),
+    });
+    onRefresh();
+    onToast("נמחק!");
+  };
+
+  const passFilter = (enabled: boolean) => {
+    if (filter === "all") return true;
+    if (filter === "active") return enabled;
+    return !enabled;
+  };
+
+  const filteredPosts = posts.filter((p) => passFilter(p.enabled));
+  const filteredKeywords = keywords.filter((k) => passFilter(k.enabled));
+  const total = posts.length + keywords.length;
+  const active = posts.filter((p) => p.enabled).length + keywords.filter((k) => k.enabled).length;
+
+  return (
+    <div>
+      <div className="card" style={{ marginBottom: 16 }}>
+        <div className="card-header">
+          <div>
+            <h3>סקירה כללית</h3>
+            <p className="section-desc">
+              {active} פעילים מתוך {total} חוקים
+            </p>
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button className="btn btn-ghost btn-sm" onClick={() => onGoTo("posts")}>+ פוסט</button>
+            <button className="btn btn-ghost btn-sm" onClick={() => onGoTo("keywords")}>+ מילת מפתח</button>
+          </div>
+        </div>
+        <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+          <button
+            className={`btn btn-sm ${filter === "all" ? "btn-primary" : "btn-ghost"}`}
+            onClick={() => setFilter("all")}
+          >
+            הכל ({total})
+          </button>
+          <button
+            className={`btn btn-sm ${filter === "active" ? "btn-primary" : "btn-ghost"}`}
+            onClick={() => setFilter("active")}
+          >
+            פעילים ({active})
+          </button>
+          <button
+            className={`btn btn-sm ${filter === "inactive" ? "btn-primary" : "btn-ghost"}`}
+            onClick={() => setFilter("inactive")}
+          >
+            כבויים ({total - active})
+          </button>
+        </div>
+      </div>
+
+      {editingPost && (
+        <PostEditForm
+          post={editingPost}
+          onSave={() => {
+            setEditingPost(null);
+            onRefresh();
+            onToast("עודכן!");
+          }}
+          onCancel={() => setEditingPost(null)}
+        />
+      )}
+
+      {editingKeyword && (
+        <KeywordEditForm
+          kw={editingKeyword}
+          onSave={() => {
+            setEditingKeyword(null);
+            onRefresh();
+            onToast("עודכן!");
+          }}
+          onCancel={() => setEditingKeyword(null)}
+        />
+      )}
+
+      {filteredPosts.length === 0 && filteredKeywords.length === 0 && (
+        <div className="empty">
+          <p>אין חוקים להצגה</p>
+        </div>
+      )}
+
+      {filteredPosts.map((post) => (
+        <div className="card" key={`post-${post.id}`}>
+          <div className="card-header">
+            <div>
+              <span className="tag" style={{ fontSize: 11, marginLeft: 8 }}>פוסט</span>
+              <strong style={{ color: "#fff" }}>{post.name}</strong>
+            </div>
+            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              <span className={`status ${post.enabled ? "status-on" : "status-off"}`}>
+                {post.enabled ? "פעיל" : "מושהה"}
+              </span>
+              <label className="switch">
+                <input type="checkbox" checked={post.enabled} onChange={() => togglePost(post)} />
+                <span className="slider" />
+              </label>
+            </div>
+          </div>
+          <div style={{ fontSize: 13, color: "#aaa", marginTop: 8 }}>
+            תגובה: {post.replyMessage}
+          </div>
+          {post.sendDM && <FlowSummary dmMessage={post.dmMessage} dmFlow={post.dmFlow || []} />}
+          <div className="actions">
+            <button className="btn btn-ghost btn-sm" onClick={() => setEditingPost(post)}>ערוך</button>
+            <button className="btn btn-ghost btn-sm" onClick={() => togglePost(post)}>
+              {post.enabled ? "השהה" : "הפעל"}
+            </button>
+            <button className="btn btn-danger btn-sm" onClick={() => deletePost(post.id)}>מחק</button>
+          </div>
+        </div>
+      ))}
+
+      {filteredKeywords.map((kw) => (
+        <div className="card" key={`kw-${kw.id}`}>
+          <div className="card-header">
+            <div>
+              <span className="tag" style={{ fontSize: 11, marginLeft: 8 }}>מילת מפתח</span>
+              <strong style={{ color: "#fff" }}>{kw.keyword}</strong>
+              {kw.matchExact && (
+                <span style={{ fontSize: 11, color: "#666", marginRight: 8 }}>התאמה מדויקת</span>
+              )}
+            </div>
+            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              <span className={`status ${kw.enabled ? "status-on" : "status-off"}`}>
+                {kw.enabled ? "פעיל" : "מושהה"}
+              </span>
+              <label className="switch">
+                <input type="checkbox" checked={kw.enabled} onChange={() => toggleKeyword(kw)} />
+                <span className="slider" />
+              </label>
+            </div>
+          </div>
+          <div style={{ fontSize: 13, color: "#aaa", marginTop: 8 }}>
+            תגובה: {kw.replyMessage}
+          </div>
+          {kw.sendDM && <FlowSummary dmMessage={kw.dmMessage} dmFlow={kw.dmFlow || []} />}
+          <div className="actions">
+            <button className="btn btn-ghost btn-sm" onClick={() => setEditingKeyword(kw)}>ערוך</button>
+            <button className="btn btn-ghost btn-sm" onClick={() => toggleKeyword(kw)}>
+              {kw.enabled ? "השהה" : "הפעל"}
+            </button>
+            <button className="btn btn-danger btn-sm" onClick={() => deleteKeyword(kw.id)}>מחק</button>
+          </div>
+        </div>
+      ))}
     </div>
   );
 }
