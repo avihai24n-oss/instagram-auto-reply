@@ -7,6 +7,20 @@ const supabase = createClient(
 
 const CONFIG_ID = "main";
 
+// A single button in a flow step - either opens a URL or triggers another step
+export interface FlowButton {
+  type: "url" | "postback";
+  title: string;          // button label, up to 20 chars
+  url?: string;           // for URL buttons
+  nextStepIndex?: number; // for postback buttons - which step comes next in the flow
+}
+
+// One step in a message flow = text + 0-3 buttons
+export interface FlowStep {
+  text: string;           // message text, up to 640 chars
+  buttons: FlowButton[];  // 0-3 buttons
+}
+
 export interface PostConfig {
   id: string;
   mediaId: string;
@@ -15,7 +29,8 @@ export interface PostConfig {
   enabled: boolean;
   keywords: string[];
   replyMessage: string;
-  dmMessage: string;
+  dmMessage: string;       // used when dmFlow is empty
+  dmFlow: FlowStep[];      // step[0] is sent first, postback buttons navigate to other step indexes
   sendDM: boolean;
   quickReplies: QuickReplyOption[];
 }
@@ -25,7 +40,8 @@ export interface KeywordTrigger {
   keyword: string;
   enabled: boolean;
   replyMessage: string;
-  dmMessage: string;
+  dmMessage: string;       // used when dmFlow is empty
+  dmFlow: FlowStep[];      // step[0] is sent first, postback buttons navigate to other step indexes
   sendDM: boolean;
   matchExact: boolean;
 }

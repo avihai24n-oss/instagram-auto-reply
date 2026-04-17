@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getConfig, AppConfig, KeywordTrigger } from "@/lib/config";
+import { getConfig, saveConfig, AppConfig, KeywordTrigger, FlowStep } from "@/lib/config";
 
 const ACCESS_TOKEN = process.env.INSTAGRAM_ACCESS_TOKEN!;
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN!;
@@ -42,11 +42,9 @@ export async function POST(request: NextRequest) {
 
     if (body.entry) {
       for (const entry of body.entry) {
-        // Handle comment & mention events
         if (entry.changes) {
           for (const change of entry.changes) {
             if (change.field === "comments") {
-              console.log("COMMENT DATA:", JSON.stringify(change.value));
               await handleComment(change.value, config);
             }
             if (change.field === "mentions") {
@@ -55,14 +53,12 @@ export async function POST(request: NextRequest) {
           }
         }
 
-        // Handle messaging events (DMs, postbacks)
         if (entry.messaging) {
           for (const event of entry.messaging) {
-            if (event.message) {
-              await handleIncomingMessage(event, config);
-            }
             if (event.postback) {
               await handlePostback(event, config);
+            } else if (event.message) {
+              await handleIncomingMessage(event, config);
             }
           }
         }
@@ -89,48 +85,29 @@ async function handleComment(
 ) {
   const { id: commentId, text, from, media } = commentData;
 
-  // Skip replies to comments
   if (commentData.parent_id) return;
-
-  // Skip already processed
   if (processedComments.has(commentId)) return;
   processedComments.add(commentId);
 
-  // Don't reply to ourselves
   const myUserId = await getMyUserId();
   if (from.id === myUserId) return;
 
   console.log(`Comment from @${from.username} on media ${media.id}: "${text}"`);
-  console.log(`Config has ${config.posts.length} posts, ${config.keywordTriggers.length} keyword triggers`);
-  console.log(`Configured post mediaIds: ${config.posts.map(p => p.mediaId).join(", ")}`);
-  console.log(`Webhook media.id: "${media.id}"`);
 
-  // 1. Check if there's a specific post config for this media
-  // Try matching by mediaId first, then by permalink
-  let postConfig = config.posts.find(
-    (p) => p.enabled && p.mediaId === media.id
-  );
+  // Match by mediaId first, then fallback to permalink
+  let postConfig = config.posts.find((p) => p.enabled && p.mediaId === media.id);
 
-  // If no match by mediaId, fetch permalink from API and match by that
   if (!postConfig) {
     const permalink = await getMediaPermalink(media.id);
     if (permalink) {
       postConfig = config.posts.find(
         (p) => p.enabled && p.permalink && p.permalink === permalink
       );
-      // If matched, update the stored mediaId for faster future matching
       if (postConfig) {
-        console.log(`Matched by permalink, updating stored mediaId from ${postConfig.mediaId} to ${media.id}`);
         postConfig.mediaId = media.id;
-        const { saveConfig } = await import("@/lib/config");
         await saveConfig(config);
       }
     }
-  }
-
-  console.log(`Post config match: ${postConfig ? postConfig.name : "NONE"}`);
-  if (postConfig) {
-    console.log(`Post keywords: ${JSON.stringify(postConfig.keywords)}, replyMessage: "${postConfig.replyMessage}"`);
   }
 
   if (postConfig) {
@@ -146,35 +123,48 @@ async function handleComment(
       }
     }
 
-    // Use post-specific messages
+    const flowId = `post:${postConfig.id}`;
+    console.log(`Matched post "${postConfig.name}" (id=${postConfig.id}) sendDM=${postConfig.sendDM} flowSteps=${postConfig.dmFlow?.length ?? 0} dmMessage="${postConfig.dmMessage}"`);
     const actions: Promise<void>[] = [
       replyToComment(commentId, postConfig.replyMessage, from.username),
     ];
     if (postConfig.sendDM) {
       actions.push(
-        sendPrivateReply(commentId, postConfig.dmMessage)
+        sendFlowOrText(
+          { commentId },
+          postConfig.dmFlow,
+          postConfig.dmMessage,
+          flowId
+        )
       );
+    } else {
+      console.log("sendDM is false on this post — skipping DM");
     }
     await Promise.allSettled(actions);
     return;
   }
 
-  // 2. Check global keyword triggers
+  // Check global keyword triggers
   const matchedKeyword = findMatchingKeyword(text, config.keywordTriggers);
   if (matchedKeyword) {
+    const flowId = `keyword:${matchedKeyword.id}`;
     const actions: Promise<void>[] = [
       replyToComment(commentId, matchedKeyword.replyMessage, from.username),
     ];
     if (matchedKeyword.sendDM) {
       actions.push(
-        sendPrivateReply(commentId, matchedKeyword.dmMessage)
+        sendFlowOrText(
+          { commentId },
+          matchedKeyword.dmFlow,
+          matchedKeyword.dmMessage,
+          flowId
+        )
       );
     }
     await Promise.allSettled(actions);
     return;
   }
 
-  // No matching post config or keyword — do nothing
   console.log(`No matching rule for comment ${commentId}, skipping`);
 }
 
@@ -197,22 +187,27 @@ async function handleIncomingMessage(
 
   console.log(`DM from ${sender.id}: "${message.text}"`);
 
-  // Check if message matches any keyword trigger
   if (message.text) {
     const matchedKeyword = findMatchingKeyword(message.text, config.keywordTriggers);
     if (matchedKeyword) {
-      await sendDirectMessage(sender.id, matchedKeyword.dmMessage, config.quickReplies);
+      const flowId = `keyword:${matchedKeyword.id}`;
+      await sendFlowOrText(
+        { userId: sender.id },
+        matchedKeyword.dmFlow,
+        matchedKeyword.dmMessage,
+        flowId
+      );
       return;
     }
   }
 
   // Welcome message for new conversations
   if (config.welcomeMessage.enabled && message.text) {
-    await sendDirectMessage(sender.id, config.welcomeMessage.message, config.quickReplies);
+    await sendPlainText({ userId: sender.id }, config.welcomeMessage.message);
   }
 }
 
-// ========== Postback Handler (Quick Reply clicks) ==========
+// ========== Postback Handler (button click) ==========
 async function handlePostback(
   event: {
     sender: { id: string };
@@ -223,17 +218,142 @@ async function handlePostback(
   const { sender, postback } = event;
   console.log(`Postback from ${sender.id}: ${postback.payload}`);
 
-  // Match payload to a keyword trigger
-  const matchedKeyword = config.keywordTriggers.find(
-    (k) => k.enabled && k.keyword.toLowerCase() === postback.payload.toLowerCase()
-  );
+  // Payload format: flow:${flowId}:${stepIndex}
+  // e.g. "flow:post:abc123:2" means flowId="post:abc123", stepIndex=2
+  const match = postback.payload.match(/^flow:(.+):(\d+)$/);
+  if (!match) {
+    console.log("Postback payload does not match flow pattern, ignoring");
+    return;
+  }
 
-  if (matchedKeyword) {
-    await sendDirectMessage(sender.id, matchedKeyword.dmMessage, config.quickReplies);
+  const flowId = match[1];
+  const stepIndex = parseInt(match[2], 10);
+
+  const flow = getFlowById(flowId, config);
+  if (!flow || !flow[stepIndex]) {
+    console.log(`Flow step not found: ${flowId} step ${stepIndex}`);
+    return;
+  }
+
+  await sendFlowStep({ userId: sender.id }, flow[stepIndex], flowId);
+}
+
+// ========== Flow helpers ==========
+
+function getFlowById(flowId: string, config: AppConfig): FlowStep[] | null {
+  const [type, id] = flowId.split(":");
+  if (type === "post") {
+    const post = config.posts.find((p) => p.id === id);
+    return post?.dmFlow || null;
+  }
+  if (type === "keyword") {
+    const kw = config.keywordTriggers.find((k) => k.id === id);
+    return kw?.dmFlow || null;
+  }
+  return null;
+}
+
+type Recipient = { userId: string } | { commentId: string };
+
+function buildRecipient(r: Recipient): Record<string, string> {
+  if ("commentId" in r) return { comment_id: r.commentId };
+  return { id: r.userId };
+}
+
+async function sendFlowOrText(
+  recipient: Recipient,
+  flow: FlowStep[] | undefined,
+  fallbackText: string,
+  flowId: string
+) {
+  if (flow && flow.length > 0) {
+    console.log(`Sending flow step 0 of ${flow.length} (flowId=${flowId})`);
+    await sendFlowStep(recipient, flow[0], flowId);
+  } else if (fallbackText) {
+    console.log(`Sending plain DM text (flowId=${flowId})`);
+    await sendPlainText(recipient, fallbackText);
+  } else {
+    console.log(`No flow and no dmMessage — nothing to send (flowId=${flowId})`);
   }
 }
 
-// ========== Helper Functions ==========
+async function sendFlowStep(
+  recipient: Recipient,
+  step: FlowStep,
+  flowId: string
+) {
+  // Private Replies (comment_id) only accept plain text, not button templates.
+  // Fall back to the step's text so the user at least gets the message.
+  const isPrivateReply = "commentId" in recipient;
+  if (isPrivateReply || !step.buttons || step.buttons.length === 0) {
+    if (isPrivateReply && step.buttons && step.buttons.length > 0) {
+      console.log("Private Reply detected — stripping buttons, sending text only");
+    }
+    await sendPlainText(recipient, step.text);
+    return;
+  }
+
+  // Build buttons for Instagram API
+  const buttons = step.buttons.map((btn) => {
+    if (btn.type === "url" && btn.url) {
+      return {
+        type: "web_url",
+        url: btn.url,
+        title: btn.title,
+      };
+    }
+    // postback
+    return {
+      type: "postback",
+      title: btn.title,
+      payload: `flow:${flowId}:${btn.nextStepIndex ?? 0}`,
+    };
+  });
+
+  const messagePayload = {
+    attachment: {
+      type: "template",
+      payload: {
+        template_type: "button",
+        text: step.text,
+        buttons,
+      },
+    },
+  };
+
+  await sendMessage(recipient, messagePayload);
+}
+
+async function sendPlainText(recipient: Recipient, text: string) {
+  await sendMessage(recipient, { text });
+}
+
+async function sendMessage(recipient: Recipient, message: Record<string, unknown>) {
+  try {
+    const myUserId = await getMyUserId();
+    const payload = {
+      recipient: buildRecipient(recipient),
+      message,
+      access_token: ACCESS_TOKEN,
+    };
+    console.log("Sending message payload:", JSON.stringify(payload));
+    const res = await fetch(`${GRAPH_API}/${myUserId}/messages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json();
+    if (data.error) {
+      console.error("Error sending message:", JSON.stringify(data.error));
+    } else {
+      console.log(`Message sent to ${JSON.stringify(recipient)}:`, JSON.stringify(data));
+    }
+  } catch (error) {
+    console.error("Failed to send message:", error);
+  }
+}
+
+// ========== Other helpers ==========
 
 function findMatchingKeyword(
   text: string,
@@ -257,23 +377,22 @@ function escapeRegex(str: string): string {
 
 async function getMediaPermalink(mediaId: string): Promise<string | null> {
   try {
-    const res = await fetch(`${GRAPH_API}/${mediaId}?fields=permalink&access_token=${ACCESS_TOKEN}`);
+    const res = await fetch(
+      `${GRAPH_API}/${mediaId}?fields=permalink&access_token=${ACCESS_TOKEN}`
+    );
     const data = await res.json();
-    if (data.error) {
-      console.error("Error fetching media permalink:", data.error);
-      return null;
-    }
-    console.log(`Media ${mediaId} permalink: ${data.permalink}`);
+    if (data.error) return null;
     return data.permalink || null;
-  } catch (error) {
-    console.error("Failed to fetch media permalink:", error);
+  } catch {
     return null;
   }
 }
 
 async function getMyUserId(): Promise<string> {
   if (cachedUserId) return cachedUserId;
-  const res = await fetch(`${GRAPH_API}/me?fields=id&access_token=${ACCESS_TOKEN}`);
+  const res = await fetch(
+    `${GRAPH_API}/me?fields=id&access_token=${ACCESS_TOKEN}`
+  );
   const data = await res.json();
   cachedUserId = data.id;
   return data.id;
@@ -294,69 +413,5 @@ async function replyToComment(commentId: string, message: string, username: stri
     }
   } catch (error) {
     console.error("Failed to reply to comment:", error);
-  }
-}
-
-async function sendPrivateReply(commentId: string, message: string) {
-  try {
-    const myUserId = await getMyUserId();
-    const res = await fetch(`${GRAPH_API}/${myUserId}/messages`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        recipient: { comment_id: commentId },
-        message: { text: message },
-        access_token: ACCESS_TOKEN,
-      }),
-    });
-    const data = await res.json();
-    if (data.error) {
-      console.error("Error sending private reply:", data.error);
-    } else {
-      console.log(`Private reply DM sent for comment ${commentId}`);
-    }
-  } catch (error) {
-    console.error("Failed to send private reply:", error);
-  }
-}
-
-async function sendDirectMessage(
-  recipientId: string,
-  message: string,
-  quickRepliesConfig: AppConfig["quickReplies"]
-) {
-  try {
-    const myUserId = await getMyUserId();
-
-    // Build message payload
-    const messagePayload: Record<string, unknown> = { text: message };
-
-    // Add quick replies if enabled
-    if (quickRepliesConfig.enabled && quickRepliesConfig.options.length > 0) {
-      messagePayload.quick_replies = quickRepliesConfig.options.map((opt) => ({
-        content_type: "text",
-        title: opt.title,
-        payload: opt.payload,
-      }));
-    }
-
-    const res = await fetch(`${GRAPH_API}/${myUserId}/messages`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        recipient: { id: recipientId },
-        message: messagePayload,
-        access_token: ACCESS_TOKEN,
-      }),
-    });
-
-    const data = await res.json();
-    if (data.error) {
-      console.error("Error sending DM:", data.error);
-    } else {
-      console.log(`DM sent to ${recipientId}`);
-    }
-  } catch (error) {
-    console.error("Failed to send DM:", error);
   }
 }
