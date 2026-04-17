@@ -282,33 +282,40 @@ async function sendFlowStep(
   step: FlowStep,
   flowId: string
 ) {
-  // Private Replies (comment_id) only accept plain text, not button templates.
-  // Fall back to the step's text so the user at least gets the message.
-  const isPrivateReply = "commentId" in recipient;
-  if (isPrivateReply || !step.buttons || step.buttons.length === 0) {
-    if (isPrivateReply && step.buttons && step.buttons.length > 0) {
-      console.log("Private Reply detected — stripping buttons, sending text only");
-    }
+  if (!step.text || step.text.trim().length === 0) {
+    console.error(`Flow step has empty text (flowId=${flowId}) — skipping`);
+    return;
+  }
+
+  if (!step.buttons || step.buttons.length === 0) {
     await sendPlainText(recipient, step.text);
     return;
   }
 
-  // Build buttons for Instagram API
-  const buttons = step.buttons.map((btn) => {
-    if (btn.type === "url" && btn.url) {
+  // Build buttons for Instagram API — skip any with missing required fields
+  const buttons = step.buttons
+    .filter((btn) => btn.title && btn.title.trim().length > 0)
+    .filter((btn) => btn.type !== "url" || (btn.url && btn.url.trim().length > 0))
+    .map((btn) => {
+      if (btn.type === "url" && btn.url) {
+        return {
+          type: "web_url",
+          url: btn.url,
+          title: btn.title,
+        };
+      }
       return {
-        type: "web_url",
-        url: btn.url,
+        type: "postback",
         title: btn.title,
+        payload: `flow:${flowId}:${btn.nextStepIndex ?? 0}`,
       };
-    }
-    // postback
-    return {
-      type: "postback",
-      title: btn.title,
-      payload: `flow:${flowId}:${btn.nextStepIndex ?? 0}`,
-    };
-  });
+    });
+
+  if (buttons.length === 0) {
+    console.log("All buttons were invalid — falling back to plain text");
+    await sendPlainText(recipient, step.text);
+    return;
+  }
 
   const messagePayload = {
     attachment: {
