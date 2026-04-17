@@ -28,7 +28,7 @@ export interface PostConfig {
   name: string;
   enabled: boolean;
   keywords: string[];
-  replyMessage: string;
+  replyMessages: string[]; // up to 3 options — one is picked randomly per comment
   dmMessage: string;       // used when dmFlow is empty
   dmFlow: FlowStep[];      // step[0] is sent first, postback buttons navigate to other step indexes
   sendDM: boolean;
@@ -101,14 +101,25 @@ export async function getConfig(): Promise<AppConfig> {
     .single();
 
   if (error || !data) {
-    // First time — insert default config
     await supabase
       .from("bot_config")
       .upsert({ id: CONFIG_ID, config: DEFAULT_CONFIG });
     return DEFAULT_CONFIG;
   }
 
-  return data.config as AppConfig;
+  return migrateConfig(data.config as AppConfig);
+}
+
+function migrateConfig(config: AppConfig): AppConfig {
+  if (!config.posts) return config;
+  for (const post of config.posts) {
+    const legacy = (post as unknown as { replyMessage?: string }).replyMessage;
+    if (!post.replyMessages) {
+      post.replyMessages = legacy ? [legacy] : [];
+    }
+    delete (post as unknown as { replyMessage?: string }).replyMessage;
+  }
+  return config;
 }
 
 export async function saveConfig(config: AppConfig): Promise<void> {

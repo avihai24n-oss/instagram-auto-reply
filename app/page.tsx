@@ -22,7 +22,7 @@ interface PostConfig {
   name: string;
   enabled: boolean;
   keywords: string[];
-  replyMessage: string;
+  replyMessages: string[];
   dmMessage: string;
   dmFlow: FlowStep[];
   sendDM: boolean;
@@ -563,9 +563,7 @@ function PostsTab({
               </div>
             </div>
           )}
-          <div style={{ fontSize: 13, color: "#aaa", marginBottom: 4 }}>
-            תגובה: {post.replyMessage}
-          </div>
+          <RepliesSummary messages={post.replyMessages || []} />
           {post.sendDM && <FlowSummary dmMessage={post.dmMessage} dmFlow={post.dmFlow || []} />}
           <div className="actions">
             <button className="btn btn-ghost btn-sm" onClick={() => setEditingPost(post)}>
@@ -576,6 +574,75 @@ function PostsTab({
             </button>
           </div>
         </div>
+      ))}
+    </div>
+  );
+}
+
+function RepliesEditor({
+  messages,
+  onChange,
+}: {
+  messages: string[];
+  onChange: (m: string[]) => void;
+}) {
+  const update = (i: number, v: string) => {
+    const next = [...messages];
+    next[i] = v;
+    onChange(next);
+  };
+  const add = () => {
+    if (messages.length < 3) onChange([...messages, ""]);
+  };
+  const remove = (i: number) => {
+    const next = messages.filter((_, idx) => idx !== i);
+    onChange(next.length === 0 ? [""] : next);
+  };
+
+  return (
+    <div className="form-group">
+      <label>הודעת תגובה (Reply) — עד 3 ווריאציות, המערכת בוחרת אחת באקראי</label>
+      {messages.map((m, i) => (
+        <div key={i} style={{ display: "flex", gap: 8, marginBottom: 6 }}>
+          <textarea
+            value={m}
+            onChange={(e) => update(i, e.target.value)}
+            placeholder={`ווריאציה ${i + 1}`}
+            style={{ flex: 1 }}
+          />
+          {messages.length > 1 && (
+            <button className="btn btn-ghost btn-sm" onClick={() => remove(i)}>
+              מחק
+            </button>
+          )}
+        </div>
+      ))}
+      {messages.length < 3 && (
+        <button className="flow-add-btn" onClick={add}>
+          + הוסף ווריאציה
+        </button>
+      )}
+    </div>
+  );
+}
+
+function RepliesSummary({ messages }: { messages: string[] }) {
+  const valid = messages.filter((m) => m && m.trim().length > 0);
+  if (valid.length === 0) return null;
+  if (valid.length === 1) {
+    return (
+      <div style={{ fontSize: 13, color: "#aaa", marginBottom: 4 }}>
+        תגובה: {valid[0]}
+      </div>
+    );
+  }
+  return (
+    <div style={{ fontSize: 13, color: "#aaa", marginBottom: 4 }}>
+      <div style={{ color: "#888", fontSize: 12, marginBottom: 2 }}>
+        {valid.length} תגובות (נבחרת אחת באקראי):
+      </div>
+      {valid.map((m, i) => (
+        <div key={i} style={{ paddingRight: 8 }}>• {m}</div>
       ))}
     </div>
   );
@@ -709,7 +776,7 @@ function PostForm({
   const postName = igPost.caption
     ? igPost.caption.slice(0, 30) + (igPost.caption.length > 30 ? "..." : "")
     : `Post ${igPost.id}`;
-  const [replyMessage, setReplyMessage] = useState("");
+  const [replyMessages, setReplyMessages] = useState<string[]>([""]);
   const [dmMessage, setDmMessage] = useState("");
   const [dmFlow, setDmFlow] = useState<FlowStep[]>([]);
   const [sendDM, setSendDM] = useState(true);
@@ -733,7 +800,7 @@ function PostForm({
         name: postName,
         enabled: true,
         keywords,
-        replyMessage,
+        replyMessages: replyMessages.filter((m) => m.trim().length > 0),
         dmMessage,
         dmFlow,
         sendDM,
@@ -781,10 +848,7 @@ function PostForm({
           </div>
         )}
       </div>
-      <div className="form-group">
-        <label>הודעת תגובה (Reply)</label>
-        <textarea value={replyMessage} onChange={(e) => setReplyMessage(e.target.value)} placeholder="ההודעה שתופיע כתגובה בפוסט" />
-      </div>
+      <RepliesEditor messages={replyMessages} onChange={setReplyMessages} />
       <div className="checkbox-group">
         <input type="checkbox" checked={sendDM} onChange={(e) => setSendDM(e.target.checked)} />
         <label>שלח גם הודעה פרטית (DM)</label>
@@ -1117,7 +1181,9 @@ function PostEditForm({
   onCancel: () => void;
 }) {
   const [name, setName] = useState(post.name);
-  const [replyMessage, setReplyMessage] = useState(post.replyMessage);
+  const [replyMessages, setReplyMessages] = useState<string[]>(
+    post.replyMessages && post.replyMessages.length > 0 ? post.replyMessages : [""]
+  );
   const [dmMessage, setDmMessage] = useState(post.dmMessage);
   const [dmFlow, setDmFlow] = useState<FlowStep[]>(post.dmFlow || []);
   const [sendDM, setSendDM] = useState(post.sendDM);
@@ -1139,7 +1205,7 @@ function PostEditForm({
         ...post,
         name,
         keywords,
-        replyMessage,
+        replyMessages: replyMessages.filter((m) => m.trim().length > 0),
         dmMessage,
         dmFlow,
         sendDM,
@@ -1177,10 +1243,7 @@ function PostEditForm({
           </div>
         )}
       </div>
-      <div className="form-group">
-        <label>הודעת תגובה (Reply)</label>
-        <textarea value={replyMessage} onChange={(e) => setReplyMessage(e.target.value)} />
-      </div>
+      <RepliesEditor messages={replyMessages} onChange={setReplyMessages} />
       <div className="checkbox-group">
         <input type="checkbox" checked={sendDM} onChange={(e) => setSendDM(e.target.checked)} />
         <label>שלח גם הודעה פרטית (DM)</label>
@@ -1425,8 +1488,8 @@ function ManageTab({
               </label>
             </div>
           </div>
-          <div style={{ fontSize: 13, color: "#aaa", marginTop: 8 }}>
-            תגובה: {post.replyMessage}
+          <div style={{ marginTop: 8 }}>
+            <RepliesSummary messages={post.replyMessages || []} />
           </div>
           {post.sendDM && <FlowSummary dmMessage={post.dmMessage} dmFlow={post.dmFlow || []} />}
           <div className="actions">

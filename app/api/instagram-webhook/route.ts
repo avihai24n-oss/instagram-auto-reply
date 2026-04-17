@@ -125,9 +125,13 @@ async function handleComment(
 
     const flowId = `post:${postConfig.id}`;
     console.log(`Matched post "${postConfig.name}" (id=${postConfig.id}) sendDM=${postConfig.sendDM} flowSteps=${postConfig.dmFlow?.length ?? 0} dmMessage="${postConfig.dmMessage}"`);
-    const actions: Promise<void>[] = [
-      replyToComment(commentId, postConfig.replyMessage, from.username),
-    ];
+    const actions: Promise<void>[] = [];
+    const picked = pickRandomReply(postConfig.replyMessages);
+    if (picked) {
+      actions.push(replyToComment(commentId, picked, from.username));
+    } else {
+      console.log("No reply message configured — skipping comment reply");
+    }
     if (postConfig.sendDM) {
       actions.push(
         sendFlowOrText(
@@ -380,6 +384,13 @@ function findMatchingKeyword(
 
 function escapeRegex(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function pickRandomReply(messages: string[] | undefined): string | null {
+  if (!messages) return null;
+  const valid = messages.filter((m) => m && m.trim().length > 0);
+  if (valid.length === 0) return null;
+  return valid[Math.floor(Math.random() * valid.length)];
 }
 
 async function getMediaPermalink(mediaId: string): Promise<string | null> {
