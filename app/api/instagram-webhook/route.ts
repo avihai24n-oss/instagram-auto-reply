@@ -161,7 +161,8 @@ async function handleComment(
           { commentId },
           postConfig.dmFlow,
           postConfig.dmMessage,
-          flowId
+          flowId,
+          from.id
         )
       );
     } else {
@@ -193,7 +194,8 @@ async function handleComment(
           { commentId },
           matchedKeyword.dmFlow,
           matchedKeyword.dmMessage,
-          flowId
+          flowId,
+          from.id
         )
       );
     }
@@ -231,7 +233,8 @@ async function handleIncomingMessage(
         { userId: sender.id },
         matchedKeyword.dmFlow,
         matchedKeyword.dmMessage,
-        flowId
+        flowId,
+        sender.id
       );
       return;
     }
@@ -271,7 +274,7 @@ async function handlePostback(
     return;
   }
 
-  await sendFlowStep({ userId: sender.id }, flow[stepIndex], flowId);
+  await sendFlowStep({ userId: sender.id }, flow[stepIndex], flowId, sender.id);
 }
 
 // ========== Flow helpers ==========
@@ -300,11 +303,12 @@ async function sendFlowOrText(
   recipient: Recipient,
   flow: FlowStep[] | undefined,
   fallbackText: string,
-  flowId: string
+  flowId: string,
+  trackedUserId?: string
 ) {
   if (flow && flow.length > 0) {
     console.log(`Sending flow step 0 of ${flow.length} (flowId=${flowId})`);
-    await sendFlowStep(recipient, flow[0], flowId);
+    await sendFlowStep(recipient, flow[0], flowId, trackedUserId);
   } else if (fallbackText) {
     console.log(`Sending plain DM text (flowId=${flowId})`);
     await sendPlainText(recipient, fallbackText);
@@ -316,7 +320,8 @@ async function sendFlowOrText(
 async function sendFlowStep(
   recipient: Recipient,
   step: FlowStep,
-  flowId: string
+  flowId: string,
+  trackedUserId?: string
 ) {
   if (!step.text || step.text.trim().length === 0) {
     console.error(`Flow step has empty text (flowId=${flowId}) — skipping`);
@@ -339,7 +344,7 @@ async function sendFlowStep(
       if (btn.type === "url" && btn.url) {
         return {
           type: "web_url",
-          url: wrapForTracking(btn.url, trackedPostId),
+          url: wrapForTracking(btn.url, trackedPostId, trackedUserId),
           title: btn.title,
         };
       }
@@ -428,9 +433,14 @@ function pickRandomReply(messages: string[] | undefined): string | null {
   return valid[Math.floor(Math.random() * valid.length)];
 }
 
-function wrapForTracking(targetUrl: string, postId: string | null): string {
+function wrapForTracking(
+  targetUrl: string,
+  postId: string | null,
+  userId?: string
+): string {
   if (!postId) return targetUrl;
   const params = new URLSearchParams({ p: postId, u: targetUrl });
+  if (userId) params.set("uid", userId);
   return `${TRACKER_BASE}/api/r?${params.toString()}`;
 }
 

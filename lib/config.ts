@@ -26,6 +26,7 @@ export interface PostStats {
   adReplies: number;
   dmsSent: number;
   linkClicks: number;
+  seenClickUserIds?: string[]; // IG-scoped user IDs that already counted a click
   lastActivityAt?: string;
 }
 
@@ -138,7 +139,7 @@ function migrateConfig(config: AppConfig): AppConfig {
 // writes back. Best-effort under concurrent webhook events.
 export async function bumpPostStat(
   postId: string,
-  field: keyof PostStats,
+  field: "organicReplies" | "adReplies" | "dmsSent" | "linkClicks",
   delta = 1
 ): Promise<void> {
   const config = await getConfig();
@@ -147,14 +148,35 @@ export async function bumpPostStat(
   if (!post.stats) {
     post.stats = { organicReplies: 0, adReplies: 0, dmsSent: 0, linkClicks: 0 };
   }
-  if (field === "lastActivityAt") {
-    post.stats.lastActivityAt = new Date().toISOString();
-  } else {
-    const current = (post.stats[field] as number | undefined) ?? 0;
-    (post.stats[field] as number) = current + delta;
-    post.stats.lastActivityAt = new Date().toISOString();
-  }
+  const current = (post.stats[field] as number | undefined) ?? 0;
+  post.stats[field] = current + delta;
+  post.stats.lastActivityAt = new Date().toISOString();
   await saveConfig(config);
+}
+
+// Records a unique click for a user. Returns true if this is the first time
+// this user clicked any link on this post (i.e. the count should bump).
+export async function recordUniqueLinkClick(
+  postId: string,
+  userId: string
+): Promise<boolean> {
+  const config = await getConfig();
+  const post = config.posts.find((p) => p.id === postId);
+  if (!post) return false;
+  if (!post.stats) {
+    post.stats = { organicReplies: 0, adReplies: 0, dmsSent: 0, linkClicks: 0 };
+  }
+  if (!post.stats.seenClickUserIds) {
+    post.stats.seenClickUserIds = [];
+  }
+  if (post.stats.seenClickUserIds.includes(userId)) {
+    return false;
+  }
+  post.stats.seenClickUserIds.push(userId);
+  post.stats.linkClicks = (post.stats.linkClicks ?? 0) + 1;
+  post.stats.lastActivityAt = new Date().toISOString();
+  await saveConfig(config);
+  return true;
 }
 
 export async function saveConfig(config: AppConfig): Promise<void> {

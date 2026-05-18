@@ -1,10 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
-import { bumpPostStat } from "@/lib/config";
+import { bumpPostStat, recordUniqueLinkClick } from "@/lib/config";
 
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams;
   const postId = searchParams.get("p");
   const target = searchParams.get("u");
+  const userId = searchParams.get("uid");
 
   if (!target) {
     return NextResponse.json({ error: "Missing target URL" }, { status: 400 });
@@ -23,7 +24,15 @@ export async function GET(request: NextRequest) {
 
   if (postId) {
     try {
-      await bumpPostStat(postId, "linkClicks");
+      if (userId) {
+        const counted = await recordUniqueLinkClick(postId, userId);
+        console.log(
+          `Link click postId=${postId} userId=${userId} counted=${counted}`
+        );
+      } else {
+        // No user identity attached — fall back to raw counter
+        await bumpPostStat(postId, "linkClicks");
+      }
     } catch (err) {
       console.error("Failed to record link click:", err);
     }
