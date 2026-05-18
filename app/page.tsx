@@ -15,6 +15,14 @@ interface FlowStep {
   buttons: FlowButton[];
 }
 
+interface PostStats {
+  organicReplies: number;
+  adReplies: number;
+  dmsSent: number;
+  linkClicks: number;
+  lastActivityAt?: string;
+}
+
 interface PostConfig {
   id: string;
   mediaId: string;
@@ -27,6 +35,7 @@ interface PostConfig {
   dmFlow: FlowStep[];
   sendDM: boolean;
   quickReplies: { title: string; payload: string }[];
+  stats?: PostStats;
 }
 
 interface KeywordTrigger {
@@ -565,6 +574,7 @@ function PostsTab({
           )}
           <RepliesSummary messages={post.replyMessages || []} />
           {post.sendDM && <FlowSummary dmMessage={post.dmMessage} dmFlow={post.dmFlow || []} />}
+          {post.enabled && <PostStatsCard stats={post.stats} />}
           <div className="actions">
             <button className="btn btn-ghost btn-sm" onClick={() => setEditingPost(post)}>
               ערוך
@@ -644,6 +654,80 @@ function RepliesSummary({ messages }: { messages: string[] }) {
       {valid.map((m, i) => (
         <div key={i} style={{ paddingRight: 8 }}>• {m}</div>
       ))}
+    </div>
+  );
+}
+
+// ========== Per-post analytics ==========
+function PostStatsCard({ stats }: { stats?: PostStats }) {
+  const s = stats || { organicReplies: 0, adReplies: 0, dmsSent: 0, linkClicks: 0 };
+  const totalReplies = s.organicReplies + s.adReplies;
+  const adShare = totalReplies > 0 ? Math.round((s.adReplies / totalReplies) * 100) : 0;
+
+  const items = [
+    { label: "תגובות אורגניות", value: s.organicReplies, color: "#4ade80" },
+    { label: "תגובות ממודעה", value: s.adReplies, color: "#60a5fa" },
+    { label: "DMs נשלחו", value: s.dmsSent, color: "#fbbf24" },
+    { label: "קליקים על קישור", value: s.linkClicks, color: "#f472b6" },
+  ];
+
+  return (
+    <div
+      style={{
+        background: "#111",
+        border: "1px solid #2a2a2a",
+        borderRadius: 10,
+        padding: "12px 14px",
+        marginTop: 10,
+        marginBottom: 6,
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          marginBottom: 10,
+        }}
+      >
+        <span style={{ fontSize: 12, color: "#888", fontWeight: 600, letterSpacing: 0.3 }}>
+          סטטיסטיקות
+        </span>
+        {totalReplies > 0 && (
+          <span style={{ fontSize: 11, color: "#666" }}>
+            {adShare}% מהמודעה • {100 - adShare}% אורגני
+          </span>
+        )}
+      </div>
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(4, 1fr)",
+          gap: 8,
+        }}
+      >
+        {items.map((it) => (
+          <div
+            key={it.label}
+            style={{
+              background: "#0c0c0c",
+              borderRadius: 8,
+              padding: "8px 6px",
+              textAlign: "center",
+            }}
+          >
+            <div style={{ fontSize: 20, color: it.color, fontWeight: 700, lineHeight: 1.2 }}>
+              {it.value}
+            </div>
+            <div style={{ fontSize: 10, color: "#777", marginTop: 2 }}>{it.label}</div>
+          </div>
+        ))}
+      </div>
+      {s.lastActivityAt && (
+        <div style={{ fontSize: 11, color: "#555", marginTop: 8, textAlign: "left" }}>
+          פעילות אחרונה: {new Date(s.lastActivityAt).toLocaleString("he-IL")}
+        </div>
+      )}
     </div>
   );
 }
@@ -1492,6 +1576,7 @@ function ManageTab({
             <RepliesSummary messages={post.replyMessages || []} />
           </div>
           {post.sendDM && <FlowSummary dmMessage={post.dmMessage} dmFlow={post.dmFlow || []} />}
+          {post.enabled && <PostStatsCard stats={post.stats} />}
           <div className="actions">
             <button className="btn btn-ghost btn-sm" onClick={() => setEditingPost(post)}>ערוך</button>
             <button className="btn btn-ghost btn-sm" onClick={() => togglePost(post)}>

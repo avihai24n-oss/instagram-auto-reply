@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getConfig, saveConfig, AppConfig, KeywordTrigger, FlowStep } from "@/lib/config";
+import { getConfig, saveConfig, bumpPostStat, AppConfig, KeywordTrigger, FlowStep } from "@/lib/config";
 
 const ACCESS_TOKEN = process.env.INSTAGRAM_ACCESS_TOKEN!;
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN!;
 const GRAPH_API = "https://graph.instagram.com/v21.0";
+const TRACKER_BASE = process.env.TRACKER_BASE_URL || "https://instagram-auto-reply-rho.vercel.app";
 
 // Track processed IDs to prevent duplicate replies
 const processedComments = new Set<string>();
@@ -143,7 +144,10 @@ async function handleComment(
     }
 
     const flowId = `post:${postConfig.id}`;
-    console.log(`Matched post "${postConfig.name}" (id=${postConfig.id}) sendDM=${postConfig.sendDM} flowSteps=${postConfig.dmFlow?.length ?? 0} dmMessage="${postConfig.dmMessage}"`);
+    const isAd =
+      media.media_product_type === "AD" || Boolean(media.original_media_id);
+    console.log(`Matched post "${postConfig.name}" source=${isAd ? "ad" : "organic"} sendDM=${postConfig.sendDM} flowSteps=${postConfig.dmFlow?.length ?? 0}`);
+
     const actions: Promise<void>[] = [];
     const picked = pickRandomReply(postConfig.replyMessages);
     if (picked) {
@@ -164,6 +168,11 @@ async function handleComment(
       console.log("sendDM is false on this post — skipping DM");
     }
     await Promise.allSettled(actions);
+
+    await bumpPostStat(postConfig.id, isAd ? "adReplies" : "organicReplies");
+    if (postConfig.sendDM) {
+      await bumpPostStat(postConfig.id, "dmsSent");
+    }
     return;
   }
 
@@ -319,6 +328,9 @@ async function sendFlowStep(
     return;
   }
 
+  // flowId format is "post:<id>" or "keyword:<id>" — extract post id for tracking
+  const trackedPostId = flowId.startsWith("post:") ? flowId.slice(5) : null;
+
   // Build buttons for Instagram API — skip any with missing required fields
   const buttons = step.buttons
     .filter((btn) => btn.title && btn.title.trim().length > 0)
@@ -327,7 +339,7 @@ async function sendFlowStep(
       if (btn.type === "url" && btn.url) {
         return {
           type: "web_url",
-          url: btn.url,
+          url: wrapForTracking(btn.url, trackedPostId),
           title: btn.title,
         };
       }
@@ -414,6 +426,12 @@ function pickRandomReply(messages: string[] | undefined): string | null {
   const valid = messages.filter((m) => m && m.trim().length > 0);
   if (valid.length === 0) return null;
   return valid[Math.floor(Math.random() * valid.length)];
+}
+
+function wrapForTracking(targetUrl: string, postId: string | null): string {
+  if (!postId) return targetUrl;
+  const params = new URLSearchParams({ p: postId, u: targetUrl });
+  return `${TRACKER_BASE}/api/r?${params.toString()}`;
 }
 
 async function getMediaPermalink(mediaId: string): Promise<string | null> {

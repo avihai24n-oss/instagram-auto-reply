@@ -21,6 +21,14 @@ export interface FlowStep {
   buttons: FlowButton[];  // 0-3 buttons
 }
 
+export interface PostStats {
+  organicReplies: number;
+  adReplies: number;
+  dmsSent: number;
+  linkClicks: number;
+  lastActivityAt?: string;
+}
+
 export interface PostConfig {
   id: string;
   mediaId: string;
@@ -33,6 +41,7 @@ export interface PostConfig {
   dmFlow: FlowStep[];      // step[0] is sent first, postback buttons navigate to other step indexes
   sendDM: boolean;
   quickReplies: QuickReplyOption[];
+  stats?: PostStats;
 }
 
 export interface KeywordTrigger {
@@ -118,8 +127,34 @@ function migrateConfig(config: AppConfig): AppConfig {
       post.replyMessages = legacy ? [legacy] : [];
     }
     delete (post as unknown as { replyMessage?: string }).replyMessage;
+    if (!post.stats) {
+      post.stats = { organicReplies: 0, adReplies: 0, dmsSent: 0, linkClicks: 0 };
+    }
   }
   return config;
+}
+
+// Atomic-ish stat increment. Reads latest config, mutates the post's stats,
+// writes back. Best-effort under concurrent webhook events.
+export async function bumpPostStat(
+  postId: string,
+  field: keyof PostStats,
+  delta = 1
+): Promise<void> {
+  const config = await getConfig();
+  const post = config.posts.find((p) => p.id === postId);
+  if (!post) return;
+  if (!post.stats) {
+    post.stats = { organicReplies: 0, adReplies: 0, dmsSent: 0, linkClicks: 0 };
+  }
+  if (field === "lastActivityAt") {
+    post.stats.lastActivityAt = new Date().toISOString();
+  } else {
+    const current = (post.stats[field] as number | undefined) ?? 0;
+    (post.stats[field] as number) = current + delta;
+    post.stats.lastActivityAt = new Date().toISOString();
+  }
+  await saveConfig(config);
 }
 
 export async function saveConfig(config: AppConfig): Promise<void> {
