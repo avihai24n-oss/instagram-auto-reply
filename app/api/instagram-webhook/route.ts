@@ -76,9 +76,14 @@ export async function POST(request: NextRequest) {
 async function handleComment(
   commentData: {
     id: string;
-    text: string;
+    text?: string;
     from: { id: string; username: string };
-    media: { id: string };
+    media: {
+      id: string;
+      media_product_type?: string;
+      ad_id?: string;
+      original_media_id?: string;
+    };
     parent_id?: string;
   },
   config: AppConfig
@@ -92,10 +97,19 @@ async function handleComment(
   const myUserId = await getMyUserId();
   if (from.id === myUserId) return;
 
-  console.log(`Comment from @${from.username} on media ${media.id}: "${text}"`);
+  console.log(
+    `Comment from @${from.username} on media ${media.id}` +
+      (media.original_media_id ? ` (ad of ${media.original_media_id})` : "") +
+      `: "${text ?? ""}"`
+  );
 
-  // Match by mediaId first, then fallback to permalink
-  let postConfig = config.posts.find((p) => p.enabled && p.mediaId === media.id);
+  // A comment may arrive on an ad — match the original organic post too.
+  const candidateIds = [media.id, media.original_media_id].filter(
+    (id): id is string => Boolean(id)
+  );
+  let postConfig = config.posts.find(
+    (p) => p.enabled && candidateIds.includes(p.mediaId)
+  );
 
   if (!postConfig) {
     const permalink = await getMediaPermalink(media.id);
@@ -111,8 +125,13 @@ async function handleComment(
   }
 
   if (postConfig) {
-    // If post has keywords, check if comment matches
+    // If post has keywords, check if comment matches.
+    // Comments without text (emoji/sticker-only) can never match a keyword filter.
     if (postConfig.keywords.length > 0) {
+      if (!text) {
+        console.log("Post requires keyword match but comment has no text — skipping");
+        return;
+      }
       const lowerText = text.toLowerCase();
       const matched = postConfig.keywords.some((kw) =>
         lowerText.includes(kw.toLowerCase())
@@ -148,7 +167,11 @@ async function handleComment(
     return;
   }
 
-  // Check global keyword triggers
+  // Check global keyword triggers — text-less comments can never match
+  if (!text) {
+    console.log(`No text on comment ${commentId} — no global keyword to match`);
+    return;
+  }
   const matchedKeyword = findMatchingKeyword(text, config.keywordTriggers);
   if (matchedKeyword) {
     const flowId = `keyword:${matchedKeyword.id}`;
