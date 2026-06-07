@@ -212,7 +212,11 @@ async function handleIncomingMessage(
   event: {
     sender: { id: string };
     recipient: { id: string };
-    message: { mid: string; text?: string };
+    message: {
+      mid: string;
+      text?: string;
+      reply_to?: { story?: { id?: string; url?: string } };
+    };
   },
   config: AppConfig
 ) {
@@ -223,6 +227,19 @@ async function handleIncomingMessage(
 
   const myUserId = await getMyUserId();
   if (sender.id === myUserId) return;
+
+  // A reply to a story arrives as a DM with a `reply_to.story` object on the message.
+  // If the story is a sponsored ad of a configured post, run that post's automation.
+  if (message.reply_to?.story?.id) {
+    const handled = await tryHandleStoryReply(
+      message.reply_to.story.id,
+      sender.id,
+      message.text,
+      config
+    );
+    if (handled) return;
+    // Fall through to normal DM logic if no post matched.
+  }
 
   console.log(`DM from ${sender.id}: "${message.text}"`);
 
@@ -244,6 +261,76 @@ async function handleIncomingMessage(
   // Welcome message for new conversations
   if (config.welcomeMessage.enabled && message.text) {
     await sendPlainText({ userId: sender.id }, config.welcomeMessage.message);
+  }
+}
+
+// Returns true if we matched a configured post and sent that post's automation.
+async function tryHandleStoryReply(
+  storyMediaId: string,
+  senderId: string,
+  replyText: string | undefined,
+  config: AppConfig
+): Promise<boolean> {
+  console.log(`Story reply from ${senderId} on story ${storyMediaId}: "${replyText ?? ""}"`);
+
+  const storyMeta = await getStoryMediaMeta(storyMediaId);
+  console.log(`Story media meta: ${JSON.stringify(storyMeta)}`);
+
+  // Candidate post IDs to look up — the story itself + the underlying post if it's an ad.
+  const candidateIds = [storyMediaId, storyMeta?.original_media_id].filter(
+    (id): id is string => Boolean(id)
+  );
+
+  const post = config.posts.find(
+    (p) =>
+      p.enabled &&
+      p.includeSponsoredStories === true &&
+      candidateIds.includes(p.mediaId)
+  );
+
+  if (!post) {
+    console.log(
+      `Story ${storyMediaId} not linked to any post with includeSponsoredStories enabled — skipping`
+    );
+    return false;
+  }
+
+  console.log(`Matched story reply to post "${post.name}" (id=${post.id})`);
+
+  const flowId = `post:${post.id}`;
+  if (post.sendDM) {
+    await sendFlowOrText(
+      { userId: senderId },
+      post.dmFlow,
+      post.dmMessage,
+      flowId,
+      senderId
+    );
+    await bumpPostStat(post.id, "dmsSent");
+  } else {
+    console.log("sendDM is false on this post — story reply matched but no DM sent");
+  }
+
+  await bumpPostStat(post.id, "storyReplies");
+  return true;
+}
+
+async function getStoryMediaMeta(
+  mediaId: string
+): Promise<{ media_product_type?: string; original_media_id?: string } | null> {
+  try {
+    const res = await fetch(
+      `${GRAPH_API}/${mediaId}?fields=media_product_type,original_media_id&access_token=${ACCESS_TOKEN}`
+    );
+    const data = await res.json();
+    if (data.error) {
+      console.warn("Could not fetch story media meta:", JSON.stringify(data.error));
+      return null;
+    }
+    return data;
+  } catch (err) {
+    console.warn("Failed fetching story media meta:", err);
+    return null;
   }
 }
 

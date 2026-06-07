@@ -24,6 +24,7 @@ export interface FlowStep {
 export interface PostStats {
   organicReplies: number;
   adReplies: number;
+  storyReplies?: number;  // replies to a sponsored story whose original_media_id matches this post
   dmsSent: number;
   linkClicks: number;
   seenClickUserIds?: string[]; // IG-scoped user IDs that already counted a click
@@ -50,6 +51,7 @@ export interface PostConfig {
   dmMessage: string;       // used when dmFlow is empty
   dmFlow: FlowStep[];      // step[0] is sent first, postback buttons navigate to other step indexes
   sendDM: boolean;
+  includeSponsoredStories?: boolean; // also handle replies to a sponsored story whose original_media_id == this post
   quickReplies: QuickReplyOption[];
   stats?: PostStats;
   followUps?: FollowUpMessage[]; // scheduled DMs sent after user clicks postback (requires dmFlow.length >= 2)
@@ -92,6 +94,7 @@ export interface AppConfig {
   globalSettings: GlobalSettings;
   posts: PostConfig[];
   keywordTriggers: KeywordTrigger[];
+  storyKeywordTriggers?: KeywordTrigger[]; // reserved for upcoming per-story keyword UI
   quickReplies: QuickRepliesConfig;
   welcomeMessage: WelcomeMessageConfig;
 }
@@ -142,6 +145,12 @@ function migrateConfig(config: AppConfig): AppConfig {
     if (!post.stats) {
       post.stats = { organicReplies: 0, adReplies: 0, dmsSent: 0, linkClicks: 0 };
     }
+    if (typeof post.includeSponsoredStories !== "boolean") {
+      post.includeSponsoredStories = false;
+    }
+  }
+  if (!config.storyKeywordTriggers) {
+    config.storyKeywordTriggers = [];
   }
   return config;
 }
@@ -150,7 +159,7 @@ function migrateConfig(config: AppConfig): AppConfig {
 // writes back. Best-effort under concurrent webhook events.
 export async function bumpPostStat(
   postId: string,
-  field: "organicReplies" | "adReplies" | "dmsSent" | "linkClicks",
+  field: "organicReplies" | "adReplies" | "storyReplies" | "dmsSent" | "linkClicks",
   delta = 1
 ): Promise<void> {
   const config = await getConfig();
