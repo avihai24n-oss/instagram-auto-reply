@@ -18,6 +18,7 @@ interface FlowStep {
 interface PostStats {
   organicReplies: number;
   adReplies: number;
+  storyReplies?: number;
   dmsSent: number;
   linkClicks: number;
   lastActivityAt?: string;
@@ -41,6 +42,7 @@ interface PostConfig {
   dmMessage: string;
   dmFlow: FlowStep[];
   sendDM: boolean;
+  includeSponsoredStories?: boolean;
   quickReplies: { title: string; payload: string }[];
   stats?: PostStats;
   followUps?: FollowUpMessage[];
@@ -674,12 +676,14 @@ function RepliesSummary({ messages }: { messages: string[] }) {
 // ========== Per-post analytics ==========
 function PostStatsCard({ stats }: { stats?: PostStats }) {
   const s = stats || { organicReplies: 0, adReplies: 0, dmsSent: 0, linkClicks: 0 };
+  const storyReplies = s.storyReplies ?? 0;
   const totalReplies = s.organicReplies + s.adReplies;
   const adShare = totalReplies > 0 ? Math.round((s.adReplies / totalReplies) * 100) : 0;
 
   const items = [
     { label: "תגובות אורגניות", value: s.organicReplies, color: "#4ade80" },
     { label: "תגובות ממודעה", value: s.adReplies, color: "#60a5fa" },
+    { label: "תגובות מסטורי", value: storyReplies, color: "#c084fc" },
     { label: "DMs נשלחו", value: s.dmsSent, color: "#fbbf24" },
     { label: "קליקים על קישור", value: s.linkClicks, color: "#f472b6" },
   ];
@@ -715,7 +719,7 @@ function PostStatsCard({ stats }: { stats?: PostStats }) {
       <div
         style={{
           display: "grid",
-          gridTemplateColumns: "repeat(4, 1fr)",
+          gridTemplateColumns: "repeat(5, 1fr)",
           gap: 8,
         }}
       >
@@ -877,6 +881,7 @@ function PostForm({
   const [dmMessage, setDmMessage] = useState("");
   const [dmFlow, setDmFlow] = useState<FlowStep[]>([]);
   const [sendDM, setSendDM] = useState(true);
+  const [includeSponsoredStories, setIncludeSponsoredStories] = useState(false);
   const [keywords, setKeywords] = useState<string[]>([]);
   const [kwInput, setKwInput] = useState("");
 
@@ -901,6 +906,7 @@ function PostForm({
         dmMessage,
         dmFlow,
         sendDM,
+        includeSponsoredStories,
         quickReplies: [],
       }),
     });
@@ -949,6 +955,14 @@ function PostForm({
       <div className="checkbox-group">
         <input type="checkbox" checked={sendDM} onChange={(e) => setSendDM(e.target.checked)} />
         <label>שלח גם הודעה פרטית (DM)</label>
+      </div>
+      <div className="checkbox-group">
+        <input
+          type="checkbox"
+          checked={includeSponsoredStories}
+          onChange={(e) => setIncludeSponsoredStories(e.target.checked)}
+        />
+        <label>כלול גם תגובות לסטורי הממומן של הפוסט</label>
       </div>
       {sendDM && (
         <MessageEditor
@@ -1284,6 +1298,9 @@ function PostEditForm({
   const [dmMessage, setDmMessage] = useState(post.dmMessage);
   const [dmFlow, setDmFlow] = useState<FlowStep[]>(post.dmFlow || []);
   const [sendDM, setSendDM] = useState(post.sendDM);
+  const [includeSponsoredStories, setIncludeSponsoredStories] = useState(
+    post.includeSponsoredStories ?? false
+  );
   const [keywords, setKeywords] = useState<string[]>(post.keywords);
   const [kwInput, setKwInput] = useState("");
   const [followUps, setFollowUps] = useState<FollowUpMessage[]>(post.followUps || []);
@@ -1307,6 +1324,7 @@ function PostEditForm({
         dmMessage,
         dmFlow,
         sendDM,
+        includeSponsoredStories,
         followUps,
       }),
     });
@@ -1346,6 +1364,14 @@ function PostEditForm({
       <div className="checkbox-group">
         <input type="checkbox" checked={sendDM} onChange={(e) => setSendDM(e.target.checked)} />
         <label>שלח גם הודעה פרטית (DM)</label>
+      </div>
+      <div className="checkbox-group">
+        <input
+          type="checkbox"
+          checked={includeSponsoredStories}
+          onChange={(e) => setIncludeSponsoredStories(e.target.checked)}
+        />
+        <label>כלול גם תגובות לסטורי הממומן של הפוסט</label>
       </div>
       {sendDM && (
         <MessageEditor
