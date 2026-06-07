@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
-  fetchDueMessages,
+  claimDueMessages,
   markSent,
   markSkipped,
   markFailed,
@@ -50,8 +50,8 @@ export async function GET(request: NextRequest) {
     }
   }
 
-  const due = await fetchDueMessages(50);
-  console.log(`Cron: ${due.length} due messages`);
+  const due = await claimDueMessages(50);
+  console.log(`Cron: claimed ${due.length} due messages`);
 
   const results = { sent: 0, skipped: 0, failed: 0 };
 

@@ -10,7 +10,12 @@ const supabase = createClient(
 // so the cron's safety check has buffer to catch edge cases (drift, slow runs).
 export const MAX_DELAY_HOURS = 23;
 
-export type ScheduledStatus = "pending" | "sent" | "failed" | "skipped";
+export type ScheduledStatus =
+  | "pending"
+  | "processing"
+  | "sent"
+  | "failed"
+  | "skipped";
 
 export interface ScheduledMessage {
   id: string;
@@ -81,21 +86,39 @@ export async function hasExistingSchedule(
   return !!data && data.length > 0;
 }
 
-// Fetch pending messages whose send_at is now-or-past.
-export async function fetchDueMessages(limit = 50): Promise<ScheduledMessage[]> {
+// Atomically claim due messages: flips pending → processing in a single
+// UPDATE filtered on status='pending', so two cron runs can never grab the
+// same row. Whichever update lands first wins; the other's WHERE matches
+// nothing. Prevents the double-send → spam → ban path entirely.
+export async function claimDueMessages(
+  limit = 50
+): Promise<ScheduledMessage[]> {
   const now = new Date().toISOString();
-  const { data, error } = await supabase
+  const { data: due, error: dueErr } = await supabase
     .from("scheduled_messages")
-    .select("*")
+    .select("id")
     .eq("status", "pending")
     .lte("send_at", now)
     .order("send_at", { ascending: true })
     .limit(limit);
-  if (error) {
-    console.error("fetchDueMessages failed:", error);
+  if (dueErr) {
+    console.error("claimDueMessages select failed:", dueErr);
     return [];
   }
-  return (data || []) as ScheduledMessage[];
+  if (!due || due.length === 0) return [];
+
+  const ids = due.map((d) => d.id);
+  const { data: claimed, error: claimErr } = await supabase
+    .from("scheduled_messages")
+    .update({ status: "processing" })
+    .in("id", ids)
+    .eq("status", "pending") // double-check — only claim rows still pending
+    .select();
+  if (claimErr) {
+    console.error("claimDueMessages claim failed:", claimErr);
+    return [];
+  }
+  return (claimed || []) as ScheduledMessage[];
 }
 
 export async function markSent(id: string): Promise<void> {
@@ -127,10 +150,11 @@ export async function getScheduledStats(): Promise<
     .from("scheduled_messages")
     .select("status");
   if (error || !data) {
-    return { pending: 0, sent: 0, failed: 0, skipped: 0 };
+    return { pending: 0, processing: 0, sent: 0, failed: 0, skipped: 0 };
   }
   const counts: Record<ScheduledStatus, number> = {
     pending: 0,
+    processing: 0,
     sent: 0,
     failed: 0,
     skipped: 0,
