@@ -23,6 +23,13 @@ interface PostStats {
   lastActivityAt?: string;
 }
 
+interface FollowUpMessage {
+  id: string;
+  delayHours: number;
+  text: string;
+  enabled: boolean;
+}
+
 interface PostConfig {
   id: string;
   mediaId: string;
@@ -36,6 +43,7 @@ interface PostConfig {
   sendDM: boolean;
   quickReplies: { title: string; payload: string }[];
   stats?: PostStats;
+  followUps?: FollowUpMessage[];
 }
 
 interface KeywordTrigger {
@@ -47,6 +55,7 @@ interface KeywordTrigger {
   dmFlow: FlowStep[];
   sendDM: boolean;
   matchExact: boolean;
+  followUps?: FollowUpMessage[];
 }
 
 interface AppConfig {
@@ -72,6 +81,7 @@ const TABS = [
   { id: "general", label: "הגדרות כלליות" },
   { id: "posts", label: "פוסטים ספציפיים" },
   { id: "keywords", label: "מילות מפתח" },
+  { id: "followups", label: "תזמון הודעות" },
   { id: "quickreplies", label: "Quick Replies" },
   { id: "welcome", label: "הודעת ברוכים הבאים" },
 ];
@@ -156,6 +166,9 @@ export default function Dashboard() {
       )}
       {activeTab === "keywords" && (
         <KeywordsTab keywords={config.keywordTriggers} onRefresh={loadConfig} onToast={showToast} />
+      )}
+      {activeTab === "followups" && (
+        <FollowUpsTab />
       )}
       {activeTab === "quickreplies" && (
         <QuickRepliesTab config={config.quickReplies} onSave={saveGlobal} />
@@ -1273,6 +1286,7 @@ function PostEditForm({
   const [sendDM, setSendDM] = useState(post.sendDM);
   const [keywords, setKeywords] = useState<string[]>(post.keywords);
   const [kwInput, setKwInput] = useState("");
+  const [followUps, setFollowUps] = useState<FollowUpMessage[]>(post.followUps || []);
 
   const addKeyword = () => {
     if (kwInput.trim() && !keywords.includes(kwInput.trim())) {
@@ -1293,6 +1307,7 @@ function PostEditForm({
         dmMessage,
         dmFlow,
         sendDM,
+        followUps,
       }),
     });
     onSave();
@@ -1340,6 +1355,9 @@ function PostEditForm({
           onChangeFlow={setDmFlow}
         />
       )}
+      {sendDM && (
+        <FollowUpsBuilder flow={dmFlow} followUps={followUps} onChange={setFollowUps} />
+      )}
       <div className="actions">
         <button className="btn btn-primary" onClick={submit}>שמור שינויים</button>
         <button className="btn btn-ghost" onClick={onCancel}>ביטול</button>
@@ -1364,6 +1382,7 @@ function KeywordEditForm({
   const [dmFlow, setDmFlow] = useState<FlowStep[]>(kw.dmFlow || []);
   const [sendDM, setSendDM] = useState(kw.sendDM);
   const [matchExact, setMatchExact] = useState(kw.matchExact);
+  const [followUps, setFollowUps] = useState<FollowUpMessage[]>(kw.followUps || []);
 
   const submit = async () => {
     await fetch("/api/config/keywords", {
@@ -1377,6 +1396,7 @@ function KeywordEditForm({
         dmFlow,
         sendDM,
         matchExact,
+        followUps,
       }),
     });
     onSave();
@@ -1408,6 +1428,9 @@ function KeywordEditForm({
           onChangeText={setDmMessage}
           onChangeFlow={setDmFlow}
         />
+      )}
+      {sendDM && (
+        <FollowUpsBuilder flow={dmFlow} followUps={followUps} onChange={setFollowUps} />
       )}
       <div className="actions">
         <button className="btn btn-primary" onClick={submit}>שמור שינויים</button>
@@ -1620,6 +1643,224 @@ function ManageTab({
           </div>
         </div>
       ))}
+    </div>
+  );
+}
+
+// ========== Follow-ups Builder — reusable for post + keyword forms ==========
+// Gated: only renders the editor when dmFlow has >= 2 steps AND step 0 has a postback button.
+// Without those, follow-ups can never trigger, so we hide the editor and show why.
+function FollowUpsBuilder({
+  flow,
+  followUps,
+  onChange,
+}: {
+  flow: FlowStep[];
+  followUps: FollowUpMessage[];
+  onChange: (next: FollowUpMessage[]) => void;
+}) {
+  const hasMultiStep = flow.length >= 2;
+  const hasPostback =
+    flow.length > 0 &&
+    flow[0].buttons.some((b) => b.type === "postback" && b.nextStepIndex !== undefined);
+  const ready = hasMultiStep && hasPostback;
+
+  const addFollowUp = () => {
+    if (followUps.length >= 3) return;
+    onChange([
+      ...followUps,
+      {
+        id: Math.random().toString(36).slice(2, 9),
+        delayHours: 1,
+        text: "",
+        enabled: true,
+      },
+    ]);
+  };
+
+  const updateFollowUp = (idx: number, patch: Partial<FollowUpMessage>) => {
+    onChange(followUps.map((f, i) => (i === idx ? { ...f, ...patch } : f)));
+  };
+
+  const removeFollowUp = (idx: number) => {
+    onChange(followUps.filter((_, i) => i !== idx));
+  };
+
+  return (
+    <div style={{ marginTop: 16, padding: 12, border: "1px solid #333", borderRadius: 8 }}>
+      <h4 style={{ color: "#fff", marginBottom: 4 }}>הודעות המשך (Follow-ups)</h4>
+      <p style={{ fontSize: 12, color: "#aaa", marginBottom: 12 }}>
+        הודעות שיישלחו אוטומטית רק למשתמשים שלחצו על כפתור Postback בהודעה הראשונה (כדי לעמוד בחוקי אינסטגרם)
+      </p>
+
+      {!ready && (
+        <div style={{ padding: 12, background: "#3a2a0a", border: "1px solid #f59e0b", borderRadius: 8, fontSize: 13, color: "#fbbf24" }}>
+          <strong>לא ניתן להפעיל הודעות המשך כרגע.</strong>
+          <ul style={{ marginTop: 8, paddingRight: 20 }}>
+            {!hasMultiStep && <li>צריך flow עם 2 שלבים לפחות (בחר &quot;הודעה עם כפתורים&quot;)</li>}
+            {!hasPostback && <li>השלב הראשון חייב לכלול כפתור &quot;כפתור שלב הבא&quot; (Postback)</li>}
+          </ul>
+        </div>
+      )}
+
+      {ready && followUps.map((fu, idx) => (
+        <div key={fu.id} style={{ padding: 10, background: "#1a1a1a", borderRadius: 6, marginBottom: 8 }}>
+          <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8 }}>
+            <label style={{ fontSize: 13, color: "#fff" }}>אחרי</label>
+            <select
+              value={fu.delayHours}
+              onChange={(e) => updateFollowUp(idx, { delayHours: Number(e.target.value) })}
+              style={{ width: 70 }}
+            >
+              {Array.from({ length: 23 }, (_, i) => i + 1).map((h) => (
+                <option key={h} value={h}>{h}</option>
+              ))}
+            </select>
+            <label style={{ fontSize: 13, color: "#fff" }}>שעות שלח:</label>
+            <label style={{ marginRight: "auto", fontSize: 12, color: "#aaa" }}>
+              <input
+                type="checkbox"
+                checked={fu.enabled}
+                onChange={(e) => updateFollowUp(idx, { enabled: e.target.checked })}
+                style={{ marginLeft: 4 }}
+              />
+              פעיל
+            </label>
+            <button
+              type="button"
+              className="btn btn-danger btn-sm"
+              onClick={() => removeFollowUp(idx)}
+            >
+              הסר
+            </button>
+          </div>
+          <textarea
+            value={fu.text}
+            onChange={(e) => updateFollowUp(idx, { text: e.target.value })}
+            maxLength={640}
+            placeholder="טקסט הודעת ההמשך"
+            style={{ width: "100%" }}
+          />
+        </div>
+      ))}
+
+      {ready && followUps.length < 3 && (
+        <button type="button" className="flow-add-btn" onClick={addFollowUp}>
+          + הוסף הודעת המשך (עד 3)
+        </button>
+      )}
+    </div>
+  );
+}
+
+// ========== Follow-ups Tab — stats + recent activity ==========
+interface ScheduledMessageRow {
+  id: string;
+  recipient_id: string;
+  message_text: string;
+  send_at: string;
+  source_type: string;
+  source_id: string;
+  status: "pending" | "sent" | "failed" | "skipped";
+  failure_reason?: string | null;
+  sent_at?: string | null;
+  created_at: string;
+}
+
+function FollowUpsTab() {
+  const [stats, setStats] = useState<Record<string, number>>({
+    pending: 0,
+    sent: 0,
+    failed: 0,
+    skipped: 0,
+  });
+  const [recent, setRecent] = useState<ScheduledMessageRow[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    const res = await fetch("/api/scheduled-messages");
+    if (res.ok) {
+      const data = await res.json();
+      setStats(data.stats);
+      setRecent(data.recent);
+    }
+    setLoading(false);
+  }, []);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const statusLabel: Record<string, string> = {
+    pending: "ממתין",
+    sent: "נשלח",
+    failed: "נכשל",
+    skipped: "דולג (חרג מ-24h)",
+  };
+
+  const statusColor: Record<string, string> = {
+    pending: "#888",
+    sent: "#22c55e",
+    failed: "#ef4444",
+    skipped: "#f59e0b",
+  };
+
+  return (
+    <div>
+      <div className="card">
+        <h3>סטטיסטיקות הודעות מתוזמנות</h3>
+        <p className="section-desc">
+          הודעות שתוזמנו אחרי שמשתמשים לחצו על כפתור postback ועברו לשלב 2 ב-flow
+        </p>
+        <div style={{ display: "flex", gap: 16, marginTop: 16, flexWrap: "wrap" }}>
+          {(["pending", "sent", "skipped", "failed"] as const).map((s) => (
+            <div key={s} style={{ padding: 12, background: "#1a1a1a", borderRadius: 8, minWidth: 120 }}>
+              <div style={{ fontSize: 11, color: "#aaa" }}>{statusLabel[s]}</div>
+              <div style={{ fontSize: 24, fontWeight: 700, color: statusColor[s], marginTop: 4 }}>
+                {stats[s] || 0}
+              </div>
+            </div>
+          ))}
+        </div>
+        <button className="btn btn-ghost btn-sm" style={{ marginTop: 12 }} onClick={load}>
+          רענן
+        </button>
+      </div>
+
+      <div className="card" style={{ marginTop: 16 }}>
+        <h3>הודעות אחרונות</h3>
+        {loading && <p style={{ color: "#aaa" }}>טוען...</p>}
+        {!loading && recent.length === 0 && (
+          <div className="empty">
+            <p>עדיין לא תוזמנו הודעות</p>
+            <p style={{ fontSize: 12, marginTop: 8 }}>
+              הוסף הודעות המשך לפוסט או למילת מפתח (חייב flow של 2 שלבים עם כפתור postback)
+            </p>
+          </div>
+        )}
+        {!loading && recent.map((r) => (
+          <div key={r.id} style={{ padding: 12, background: "#1a1a1a", borderRadius: 6, marginBottom: 8 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+              <span style={{ fontSize: 12, fontWeight: 600, color: statusColor[r.status] }}>
+                {statusLabel[r.status]}
+              </span>
+              <span style={{ fontSize: 11, color: "#666" }}>
+                {new Date(r.send_at).toLocaleString("he-IL")}
+              </span>
+            </div>
+            <div style={{ fontSize: 13, color: "#ddd", marginBottom: 4 }}>{r.message_text}</div>
+            <div style={{ fontSize: 11, color: "#666" }}>
+              נמען: {r.recipient_id} · מקור: {r.source_type}
+            </div>
+            {r.failure_reason && (
+              <div style={{ fontSize: 11, color: "#ef4444", marginTop: 4 }}>
+                סיבה: {r.failure_reason}
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
