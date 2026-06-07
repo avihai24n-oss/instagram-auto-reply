@@ -1687,16 +1687,16 @@ function FollowUpsBuilder({
   };
 
   return (
-    <div style={{ marginTop: 16, padding: 12, border: "1px solid #333", borderRadius: 8 }}>
-      <h4 style={{ color: "#fff", marginBottom: 4 }}>הודעות המשך (Follow-ups)</h4>
-      <p style={{ fontSize: 12, color: "#aaa", marginBottom: 12 }}>
+    <div className="followups">
+      <div className="followups-title">הודעות המשך (Follow-ups)</div>
+      <div className="followups-subtitle">
         הודעות שיישלחו אוטומטית רק למשתמשים שלחצו על כפתור Postback בהודעה הראשונה (כדי לעמוד בחוקי אינסטגרם)
-      </p>
+      </div>
 
       {!ready && (
-        <div style={{ padding: 12, background: "#3a2a0a", border: "1px solid #f59e0b", borderRadius: 8, fontSize: 13, color: "#fbbf24" }}>
-          <strong>לא ניתן להפעיל הודעות המשך כרגע.</strong>
-          <ul style={{ marginTop: 8, paddingRight: 20 }}>
+        <div className="followups-warning">
+          <strong>לא ניתן להפעיל הודעות המשך כרגע</strong>
+          <ul>
             {!hasMultiStep && <li>צריך flow עם 2 שלבים לפחות (בחר &quot;הודעה עם כפתורים&quot;)</li>}
             {!hasPostback && <li>השלב הראשון חייב לכלול כפתור &quot;כפתור שלב הבא&quot; (Postback)</li>}
           </ul>
@@ -1704,25 +1704,23 @@ function FollowUpsBuilder({
       )}
 
       {ready && followUps.map((fu, idx) => (
-        <div key={fu.id} style={{ padding: 10, background: "#1a1a1a", borderRadius: 6, marginBottom: 8 }}>
-          <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8 }}>
-            <label style={{ fontSize: 13, color: "#fff" }}>אחרי</label>
+        <div className="followup-item" key={fu.id}>
+          <div className="followup-row">
+            <span className="followup-label">אחרי</span>
             <select
               value={fu.delayHours}
               onChange={(e) => updateFollowUp(idx, { delayHours: Number(e.target.value) })}
-              style={{ width: 70 }}
             >
               {Array.from({ length: 23 }, (_, i) => i + 1).map((h) => (
                 <option key={h} value={h}>{h}</option>
               ))}
             </select>
-            <label style={{ fontSize: 13, color: "#fff" }}>שעות שלח:</label>
-            <label style={{ marginRight: "auto", fontSize: 12, color: "#aaa" }}>
+            <span className="followup-label">שעות שלח</span>
+            <label className="followup-toggle">
               <input
                 type="checkbox"
                 checked={fu.enabled}
                 onChange={(e) => updateFollowUp(idx, { enabled: e.target.checked })}
-                style={{ marginLeft: 4 }}
               />
               פעיל
             </label>
@@ -1735,17 +1733,17 @@ function FollowUpsBuilder({
             </button>
           </div>
           <textarea
+            className="followup-textarea"
             value={fu.text}
             onChange={(e) => updateFollowUp(idx, { text: e.target.value })}
             maxLength={640}
             placeholder="טקסט הודעת ההמשך"
-            style={{ width: "100%" }}
           />
         </div>
       ))}
 
       {ready && followUps.length < 3 && (
-        <button type="button" className="flow-add-btn" onClick={addFollowUp}>
+        <button type="button" className="flow-add-btn" onClick={addFollowUp} style={{ marginTop: followUps.length > 0 ? 0 : 8 }}>
           + הוסף הודעת המשך (עד 3)
         </button>
       )}
