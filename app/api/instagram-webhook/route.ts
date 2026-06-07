@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getConfig, saveConfig, bumpPostStat, AppConfig, KeywordTrigger, FlowStep } from "@/lib/config";
+import { getConfig, saveConfig, bumpPostStat, AppConfig, KeywordTrigger, FlowStep, FollowUpMessage } from "@/lib/config";
+import { scheduleMessage, hasExistingSchedule } from "@/lib/scheduledMessages";
 
 const ACCESS_TOKEN = process.env.INSTAGRAM_ACCESS_TOKEN!;
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN!;
@@ -275,6 +276,60 @@ async function handlePostback(
   }
 
   await sendFlowStep({ userId: sender.id }, flow[stepIndex], flowId, sender.id);
+
+  // Schedule follow-ups only after the user actually moved past step 0 —
+  // a postback that lands on step >= 1 is the proof that the user clicked,
+  // which opens the 24h messaging window.
+  if (stepIndex >= 1) {
+    await scheduleFollowUpsForFlow(flowId, sender.id, config);
+  }
+}
+
+async function scheduleFollowUpsForFlow(
+  flowId: string,
+  recipientId: string,
+  config: AppConfig
+) {
+  const [type, id] = flowId.split(":");
+  let followUps: FollowUpMessage[] | undefined;
+  let sourceType: "post" | "keyword" | null = null;
+
+  if (type === "post") {
+    const post = config.posts.find((p) => p.id === id);
+    followUps = post?.followUps;
+    sourceType = "post";
+  } else if (type === "keyword") {
+    const kw = config.keywordTriggers.find((k) => k.id === id);
+    followUps = kw?.followUps;
+    sourceType = "keyword";
+  }
+
+  if (!followUps?.length || !sourceType) return;
+
+  // De-dup: if any schedule already exists for this recipient+source, skip
+  const already = await hasExistingSchedule(recipientId, id);
+  if (already) {
+    console.log(
+      `Follow-ups already scheduled for ${recipientId} on ${flowId}, skipping`
+    );
+    return;
+  }
+
+  const postbackAt = new Date();
+  const enabled = followUps.filter((f) => f.enabled && f.text.trim().length > 0);
+  for (const fu of enabled) {
+    await scheduleMessage({
+      recipientId,
+      messageText: fu.text,
+      delayHours: fu.delayHours,
+      sourceType,
+      sourceId: id,
+      triggerPostbackAt: postbackAt,
+    });
+  }
+  console.log(
+    `Scheduled ${enabled.length} follow-ups for ${recipientId} on ${flowId}`
+  );
 }
 
 // ========== Flow helpers ==========

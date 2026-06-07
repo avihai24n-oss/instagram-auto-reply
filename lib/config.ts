@@ -30,6 +30,15 @@ export interface PostStats {
   lastActivityAt?: string;
 }
 
+// Scheduled follow-up message — sent X hours after user clicks a postback button
+// on the FIRST step of the dmFlow. Only valid when dmFlow has >= 2 steps.
+export interface FollowUpMessage {
+  id: string;
+  delayHours: number;  // 1–23 (hard cap below 24h to stay inside messaging window)
+  text: string;        // up to 640 chars
+  enabled: boolean;
+}
+
 export interface PostConfig {
   id: string;
   mediaId: string;
@@ -43,6 +52,7 @@ export interface PostConfig {
   sendDM: boolean;
   quickReplies: QuickReplyOption[];
   stats?: PostStats;
+  followUps?: FollowUpMessage[]; // scheduled DMs sent after user clicks postback (requires dmFlow.length >= 2)
 }
 
 export interface KeywordTrigger {
@@ -54,6 +64,7 @@ export interface KeywordTrigger {
   dmFlow: FlowStep[];      // step[0] is sent first, postback buttons navigate to other step indexes
   sendDM: boolean;
   matchExact: boolean;
+  followUps?: FollowUpMessage[]; // scheduled DMs sent after user clicks postback (requires dmFlow.length >= 2)
 }
 
 export interface QuickReplyOption {
